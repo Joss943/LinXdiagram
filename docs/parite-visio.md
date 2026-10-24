@@ -7,7 +7,7 @@ et sans reprendre les éléments de marque ou le code propriétaire de Microsoft
 
 | Domaine | LinXdiagram aujourd’hui | Écart à traiter |
 |---|---|---|
-| Création et mise en page | Ruban et volets inspirés de Visio PC, palette de bureau Office 2024, gabarits, pages, groupes, thèmes, connecteurs, règles, grille, guides, calques et validation ; modèles de flux, BPMN avec événements et tâches spécialisés, architecture réseau prête à modifier, plan de bureau et circuit | Compléter les bibliothèques cloud, datacenter et ingénierie |
+| Création et mise en page | Ruban et volets de bureau inspirés de Visio PC, gabarits, pages, groupes, thèmes, connecteurs, règles, grille, guides, calques et validation ; catalogue local de 84 types dans les familles processus, entreprise, réseau, plans, logiciel/données, calendrier et ingénierie. Chaque choix ouvre une page vierge avec le gabarit associé ; le diagramme interfonctionnel ne contient que des couloirs vides. | Compléter les bibliothèques de formes spécialisées et rapprocher davantage les options de mise en page de Visio |
 | Navigation dans le dessin | Explorateur filtrable sur la page active ou toutes les pages, avec recherche dans le texte et les données de forme, filtre par calque et sélection des formes, groupes et connecteurs | Développer les conteneurs et objets imbriqués, et afficher les propriétés du document |
 | Données | Création d’organigrammes et de flux depuis CSV ; liaison persistante dans `.lxd` des formes à plusieurs CSV locaux par clé avec actualisation à la demande ; données libres, rapports CSV et graphiques liés à une propriété, avec règles de couleur de statut configurables | Les liens CSV restent propres au `.lxd` ; liaison automatique à une base de données |
 | Fichiers Visio | Import/export VSDX, formes, pages, styles, connecteurs et plusieurs métadonnées ; les graphiques sont des annotations vectorielles dans Visio, avec métadonnées permettant à LinXdiagram de reconstruire l’association lors du réimport | Dans Visio, l’annotation peut être déplacée séparément de sa forme ; les formules ShapeSheet ne sont pas exécutées ; VSD binaire, EMF/WMF et objets OLE ne sont pas pris en charge |
@@ -17,7 +17,7 @@ et sans reprendre les éléments de marque ou le code propriétaire de Microsoft
 
 ## Ordre de travail proposé
 
-1. Compléter les bibliothèques cloud, datacenter et ingénierie.
+1. Compléter les bibliothèques spécialisées et les options propres à chaque famille du catalogue.
 2. Améliorer la fidélité des aller-retours VSDX afin que les graphiques restent liés à leurs formes dans Visio, et documenter chaque élément non pris en charge.
 3. Garder la coédition et les services cloud hors périmètre pour l’application de bureau hors ligne.
 

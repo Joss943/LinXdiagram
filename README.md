@@ -37,17 +37,17 @@ Carlito (métriquement identique à Calibri) est utilisée si elle est installé
   dialogue ↘, réduction du ruban (Ctrl+F1 ou double-clic sur un onglet).
 * **Volet Formes** : onglets FORMES / RECHERCHER, « Plus de formes », Formes rapides, gabarits ouverts,
   liste à deux colonnes, glisser-déposer.
-* Gabarits métier de départ : **diagramme de flux** prêt à modifier, **architecture réseau et serveurs**,
-  processus **BPMN 2.0** (événements message, minuterie, erreur et signal ;
-  tâches utilisateur, service, script, manuelles, d’envoi/réception et de règle métier ; passerelles
-  événementielle et complexe), plan de bureau et schéma électrique, avec leurs formes et modèles.
+* **Nouveau diagramme** : catalogue local de 84 types dans les familles processus, entreprise, réseau,
+  plans, logiciel et données, calendrier et ingénierie. Chaque choix ouvre une page vierge avec le
+  gabarit de formes et l’orientation adaptés ; les diagrammes interfonctionnels ne contiennent que
+  des couloirs vides. Les formes BPMN 2.0 comprennent notamment événements, tâches et passerelles spécialisés.
 * **Volets de tâches** : Format de la forme (Remplissage et trait, Effets, Texte, Taille et
   propriétés), Taille et position, Données de forme, Commentaires, Problèmes, Panoramique et zoom,
   et **Explorateur de dessin** avec recherche par texte ou données, filtre par calque, sélection des
   formes, groupes et connecteurs, et navigation sur toutes les pages du document.
 * **Onglets de pages** avec navigation ◀ ▶, menu « Tout » et ⊕ ; **barre d'état** avec page, taille et
   angle de la sélection, langue, mode Présentation et curseur de zoom.
-* **Menu Fichier** façon Microsoft 365 : Accueil (« Bonjour », vignettes de modèles, récents),
+* **Menu Fichier** façon Microsoft 365 : Accueil (« Bonjour », vignettes de diagrammes vierges, récents),
   Nouveau, Ouvrir, Informations (protection, propriétés), Imprimer avec **aperçu intégré**, Exporter.
 * **Menu contextuel avec mini-barre** (police, taille, gras, style rapide, remplissage, trait).
 * Thème **« En couleur »** par défaut, thème **Noir** disponible (Fichier > Options).
