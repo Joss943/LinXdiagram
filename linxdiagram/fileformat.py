@@ -18,6 +18,7 @@ import math
 import ntpath
 import os
 import re
+import unicodedata
 from typing import Callable
 
 from . import FILE_EXT, __version__, APP_NAME
@@ -238,6 +239,12 @@ def clean_data_link(raw) -> dict:
     return {"path": path, "source_key": source_key, "shape_key": shape_key, "fields": fields}
 
 
+def normalize_status_key(value: str) -> str:
+    """Compare les libellés de statut sans tenir compte de la casse ou des accents."""
+    normalized = unicodedata.normalize("NFKD", str(value)).casefold().strip()
+    return "".join(char for char in normalized if not unicodedata.combining(char))
+
+
 def clean_data_graphic(raw) -> dict:
     """Liaison d'une pastille visible à une propriété de forme."""
     raw = _dict(raw)
@@ -245,7 +252,21 @@ def clean_data_graphic(raw) -> dict:
     display = raw.get("display", "label_value")
     if not field or not isinstance(display, str) or display not in {"label_value", "value", "status"}:
         return {}
-    return {"field": field, "display": display}
+    out = {"field": field, "display": display}
+    if display == "status" and isinstance(raw.get("status_colors"), list):
+        colors, seen = [], set()
+        for rule in raw["status_colors"][:50]:
+            rule = _dict(rule)
+            value = _line(rule.get("value"), 200)
+            key = normalize_status_key(value)
+            color = _color(rule.get("color"), "", allow_none=False)
+            if not key or key in seen or not color:
+                continue
+            seen.add(key)
+            colors.append({"value": value, "color": color})
+        if colors:
+            out["status_colors"] = colors
+    return out
 
 
 def clean_image(raw) -> str:

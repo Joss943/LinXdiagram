@@ -8,14 +8,14 @@ import time
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox,
                              QHBoxLayout, QPushButton,
                              QFormLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
                              QListWidgetItem, QProgressBar, QSpinBox, QTableWidget,
                              QTableWidgetItem, QVBoxLayout)
 
 from . import security
-from .fileformat import clean_shape_style, clean_text_style
+from .fileformat import clean_shape_style, clean_text_style, normalize_status_key
 from .units import PX_PER_INCH
 
 
@@ -739,6 +739,138 @@ class DataImportDialog(QDialog):
         form.addRow("", self.new_page)
         lay.addLayout(form)
         lay.addWidget(_buttons(self, "Choisir le fichier…"))
+
+
+class DataGraphicDialog(QDialog):
+    """Configure un graphique de données et ses couleurs de statut locales."""
+
+    DEFAULT_COLORS = (("Terminé", "#e7f4e4"), ("En cours", "#fff4ce"), ("Bloqué", "#fde7e9"))
+
+    def __init__(self, parent, fields: list[str], config: dict | None = None):
+        super().__init__(parent)
+        config = config or {}
+        self.setWindowTitle("Configurer un graphique de données")
+        self.resize(520, 430)
+        lay = QVBoxLayout(self)
+        form = QFormLayout()
+        self.field = QComboBox()
+        for value in sorted(fields, key=str.casefold):
+            self.field.addItem(value, value)
+        current_field = config.get("field", "")
+        index = self.field.findData(current_field)
+        if index >= 0:
+            self.field.setCurrentIndex(index)
+        form.addRow("Propriété à afficher :", self.field)
+        self.display = QComboBox()
+        for label, value in (("Étiquette et valeur", "label_value"), ("Valeur seule", "value"),
+                             ("Pastille de statut colorée", "status")):
+            self.display.addItem(label, value)
+        index = self.display.findData(config.get("display", "label_value"))
+        if index >= 0:
+            self.display.setCurrentIndex(index)
+        form.addRow("Présentation :", self.display)
+        lay.addLayout(form)
+        self.rules_hint = QLabel("Les règles personnalisées ignorent la casse et les accents. "
+                                 "Les autres valeurs gardent les couleurs de statut automatiques.")
+        self.rules_hint.setWordWrap(True)
+        lay.addWidget(self.rules_hint)
+        self.rules = QTableWidget(0, 2)
+        self.rules.setHorizontalHeaderLabels(["Valeur du statut", "Couleur de fond"])
+        self.rules.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.rules.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.rules.verticalHeader().setVisible(False)
+        self.rules.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.rules.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.rules.cellDoubleClicked.connect(self._choose_color)
+        lay.addWidget(self.rules, 1)
+        row = QHBoxLayout()
+        self.add_rule = QPushButton("Ajouter une règle")
+        self.remove_rule = QPushButton("Supprimer")
+        self.add_rule.clicked.connect(lambda _checked=False: self._add_rule())
+        self.remove_rule.clicked.connect(lambda _checked=False: self._remove_rules())
+        row.addWidget(self.add_rule)
+        row.addWidget(self.remove_rule)
+        row.addStretch(1)
+        lay.addLayout(row)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                   QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
+        rules = config.get("status_colors")
+        if isinstance(rules, list):
+            for rule in rules[:50]:
+                if isinstance(rule, dict):
+                    self._add_rule(rule.get("value", ""), rule.get("color", "#fff4ce"), edit=False)
+        else:
+            for value, color in self.DEFAULT_COLORS:
+                self._add_rule(value, color, edit=False)
+        self.display.currentIndexChanged.connect(self._refresh_rules)
+        self._refresh_rules()
+
+    def _add_rule(self, value: str = "", color: str = "#fff4ce", edit: bool = True) -> None:
+        if self.rules.rowCount() >= 50:
+            return
+        row = self.rules.rowCount()
+        self.rules.insertRow(row)
+        value_item = QTableWidgetItem(str(value)[:200])
+        value_item.setToolTip("Valeur exacte après normalisation de la casse et des accents")
+        self.rules.setItem(row, 0, value_item)
+        self._set_color(row, color)
+        self.rules.setCurrentCell(row, 0)
+        if edit:
+            self.rules.editItem(value_item)
+        self._refresh_rules()
+
+    def _set_color(self, row: int, color: str) -> None:
+        parsed = QColor(color)
+        if not parsed.isValid():
+            parsed = QColor("#fff4ce")
+        item = QTableWidgetItem(parsed.name())
+        item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+        item.setBackground(parsed)
+        item.setForeground(QColor("#27313d" if parsed.lightness() >= 145 else "#ffffff"))
+        item.setToolTip("Double-cliquez pour choisir une couleur")
+        self.rules.setItem(row, 1, item)
+
+    def _choose_color(self, row: int, column: int) -> None:
+        if column != 1:
+            return
+        current = QColor(self.rules.item(row, column).text())
+        color = QColorDialog.getColor(current, self, "Couleur de statut")
+        if color.isValid():
+            self._set_color(row, color.name())
+
+    def _remove_rules(self) -> None:
+        rows = sorted({index.row() for index in self.rules.selectionModel().selectedRows()}, reverse=True)
+        if not rows and self.rules.currentRow() >= 0:
+            rows = [self.rules.currentRow()]
+        for row in rows:
+            self.rules.removeRow(row)
+        self._refresh_rules()
+
+    def _refresh_rules(self, *_args) -> None:
+        enabled = self.display.currentData() == "status"
+        self.rules_hint.setEnabled(enabled)
+        self.rules.setEnabled(enabled)
+        self.add_rule.setEnabled(enabled and self.rules.rowCount() < 50)
+        self.remove_rule.setEnabled(enabled and self.rules.rowCount() > 0)
+
+    def config(self) -> dict:
+        result = {"field": str(self.field.currentData()), "display": str(self.display.currentData())}
+        if result["display"] == "status":
+            rules, seen = [], set()
+            for row in range(self.rules.rowCount()):
+                value = security.clean_line(self.rules.item(row, 0).text(), 200)
+                color = self.rules.item(row, 1).text()
+                key = normalize_status_key(value)
+                if not key or key in seen or not QColor(color).isValid():
+                    continue
+                seen.add(key)
+                rules.append({"value": value, "color": QColor(color).name()})
+            if rules:
+                result["status_colors"] = rules
+        return result
 
 
 class DataLinkDialog(QDialog):

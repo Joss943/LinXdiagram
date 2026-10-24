@@ -24,8 +24,8 @@ from . import (APP_NAME, __version__, FILE_EXT, datavis, export, fileformat, ico
 from .backstage import Backstage
 from .canvas import CanvasArea
 from .commands import DocSettingsCommand, PageCommand
-from .dialogs import (DataImportDialog, DataLinkDialog, FindReplaceDialog, ImageExportDialog, LayersDialog,
-                      OptionsDialog, PageSetupDialog, PasswordDialog, PropertiesDialog,
+from .dialogs import (DataGraphicDialog, DataImportDialog, DataLinkDialog, FindReplaceDialog,
+                      ImageExportDialog, LayersDialog, OptionsDialog, PageSetupDialog, PasswordDialog, PropertiesDialog,
                       ShapeSheetDialog, ShortcutsDialog, ZoomDialog)
 from .document import Document
 from .items import ConnectorItem, ShapeItem, decode_image
@@ -305,7 +305,7 @@ class MainWindow(QMainWindow):
         A("data_unlink", "Dissocier la sélection", "data_visualizer", None,
           self.unlink_data, tip="Retire le lien CSV et conserve les données déjà importées.")
         A("data_graphic", "Configurer un graphique de données…", "data_visualizer", None,
-          self.set_data_graphic, tip="Affiche une propriété de forme sous forme d'étiquette ou de pastille de statut.")
+          self.set_data_graphic, tip="Affiche une propriété et personnalise les règles de couleur des statuts.")
         A("data_graphic_clear", "Supprimer le graphique de données", "data_visualizer", None,
           self.clear_data_graphic)
         A("shape_report", "Rapports de forme…", "shape_report", None, self.shape_report,
@@ -1911,18 +1911,10 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Graphique de données",
                                     "Les formes sélectionnées doivent partager au moins une propriété.")
             return
-        field, ok = QInputDialog.getItem(self, "Graphique de données", "Propriété à afficher :",
-                                         sorted(fields, key=str.casefold), 0, False)
-        if not ok:
+        dlg = DataGraphicDialog(self, sorted(fields, key=str.casefold), shapes[0].data_graphic)
+        if dlg.exec() != DataGraphicDialog.DialogCode.Accepted:
             return
-        displays = [("Étiquette et valeur", "label_value"), ("Valeur seule", "value"),
-                    ("Pastille de statut colorée", "status")]
-        display_label, ok = QInputDialog.getItem(self, "Graphique de données", "Présentation :",
-                                                 [label for label, _ in displays], 0, False)
-        if not ok:
-            return
-        display = next(value for label, value in displays if label == display_label)
-        config = {"field": field, "display": display}
+        config = dlg.config()
         sc.modify(shapes, lambda _it, state: state.__setitem__("data_graphic", config),
                   "Configurer un graphique de données")
 

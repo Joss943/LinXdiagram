@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import base64
 import math
-import unicodedata
 
 from PyQt6.QtCore import QBuffer, QByteArray, QIODevice, QLineF, QPointF, QRectF, Qt
 from PyQt6.QtGui import (QBrush, QColor, QFont, QImageReader, QKeySequence, QLinearGradient,
@@ -22,7 +21,7 @@ from PyQt6.QtWidgets import (QApplication, QGraphicsItem, QGraphicsTextItem, QMe
                              QStyleOptionGraphicsItem)
 
 from . import security, stencils
-from .fileformat import MAX_TEXT
+from .fileformat import MAX_TEXT, normalize_status_key
 from .routing import axis_direction, curve_controls, route_orthogonal
 from .swimlanes import HEADER as CFF_HEADER, PHASE as CFF_PHASE, TITLE as CFF_TITLE
 from .units import GRID_PX, MIN_SIZE_PX, mm_to_px
@@ -415,9 +414,15 @@ class ShapeItem(TextOwner):
 
     def data_graphic_palette(self) -> tuple[str, str, str]:
         if self.data_graphic.get("display") == "status":
-            value = self.data.get(self.data_graphic.get("field", ""), "").strip().casefold()
-            value = "".join(c for c in unicodedata.normalize("NFKD", value)
-                            if not unicodedata.combining(c))
+            value = normalize_status_key(self.data.get(self.data_graphic.get("field", ""), ""))
+            key = value
+            for rule in self.data_graphic.get("status_colors", []):
+                if normalize_status_key(rule.get("value", "")) == key:
+                    color = QColor(rule.get("color", "#f3f4f6"))
+                    fill = color.name()
+                    ink = "#27313d" if color.lightness() >= 145 else "#ffffff"
+                    border = color.darker(125).name() if color.lightness() >= 45 else color.lighter(170).name()
+                    return fill, ink, border
             if value in {"done", "complete", "completed", "termine", "terminee", "success",
                          "succeeded", "ok", "valide", "validee", "vert", "green"}:
                 return "#e7f4e4", "#237a3b", "#9fcf9b"

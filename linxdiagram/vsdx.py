@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import datetime
 import io
+import json
 import math
 import posixpath
 import re
@@ -738,10 +739,13 @@ class _Importer:
                 source_id = user_rows.get("LinXDataGraphicSource", {}).get("Value", "")
                 source_lxd_id = self.id_map.get(source_id)
                 source = next((s for s in page["shapes"] if s["id"] == source_lxd_id), None)
-                graphic = fileformat.clean_data_graphic({
-                    "field": user_rows.get("LinXDataGraphicField", {}).get("Value", ""),
-                    "display": user_rows.get("LinXDataGraphicDisplay", {}).get("Value", "")})
+                graphic = _data_graphic_from_rows(user_rows)
                 if source is not None and graphic and graphic["field"] in source.get("data", {}):
+                    current = source.get("data_graphic", {})
+                    if ("status_colors" not in graphic and current.get("field") == graphic["field"]
+                            and current.get("display") == graphic["display"]
+                            and current.get("status_colors")):
+                        graphic["status_colors"] = current["status_colors"]
                     source["data_graphic"] = graphic
                     continue
             W = abs(sheet.num("Width", 0.0) or 0.0)
@@ -831,14 +835,11 @@ class _Importer:
         cx, cy = to_page.map(W / 2, H / 2)
         sid = f"{self.prefix}{elem.get('ID')}"
         self.id_map[elem.get("ID")] = sid
+        user_rows = dict(sheet.named_rows("User"))
         type_id = forced_type
-        for key, cells in sheet.named_rows("User"):
+        for key, cells in user_rows.items():
             if type_id is None and key == "LinXType" and cells.get("Value") in stencils.SHAPES:
                 type_id = cells["Value"]
-        graphic_field = next((cells.get("Value", "") for key, cells in sheet.named_rows("User")
-                              if key == "LinXDataGraphicField"), "")
-        graphic_display = next((cells.get("Value", "") for key, cells in sheet.named_rows("User")
-                                if key == "LinXDataGraphicDisplay"), "")
         cmds, any_fill, any_line = ([], True, True)
         image = ""
         if elem.get("Type") == "Foreign":
@@ -870,7 +871,7 @@ class _Importer:
               "flip_v": bool(sheet.num("FlipY", 0)), "z": float(self.count), "text": text,
               "style": style, "text_style": self._text_style(sheet), "data": self._data(sheet),
               "link": "", "group": group}
-        data_graphic = fileformat.clean_data_graphic({"field": graphic_field, "display": graphic_display})
+        data_graphic = _data_graphic_from_rows(user_rows)
         if data_graphic:
             st["data_graphic"] = data_graphic
         locks = [sheet.num(n, 0) for n in ("LockMoveX", "LockMoveY", "LockDelete")]
@@ -1040,6 +1041,21 @@ def _cell(parent, name: str, value, unit: str | None = None, formula: str | None
     return c
 
 
+def _data_graphic_from_rows(rows: dict) -> dict:
+    colors = []
+    raw = rows.get("LinXDataGraphicColors", {}).get("Value", "")
+    if isinstance(raw, str) and len(raw) <= 16_384:
+        try:
+            colors = json.loads(raw)
+        except (TypeError, ValueError):
+            pass
+    return fileformat.clean_data_graphic({
+        "field": rows.get("LinXDataGraphicField", {}).get("Value", ""),
+        "display": rows.get("LinXDataGraphicDisplay", {}).get("Value", ""),
+        "status_colors": colors,
+    })
+
+
 def _str_formula(s: str) -> str:
     return '"' + s.replace('"', '""') + '"'
 
@@ -1142,6 +1158,12 @@ def _data_sections(shape_el, data: dict, link: str, type_id: str | None, contain
                 row = _el(sec, "Row", N=name)
                 _cell(row, "Value", value, "STR", _str_formula(value))
                 _cell(row, "Prompt", "")
+            colors = data_graphic.get("status_colors", [])
+            if colors:
+                value = json.dumps(colors, ensure_ascii=False, separators=(",", ":"))
+                row = _el(sec, "Row", N="LinXDataGraphicColors")
+                _cell(row, "Value", value, "STR", _str_formula(value))
+                _cell(row, "Prompt", "")
     if data:
         sec = _el(shape_el, "Section", N="Property")
         used = set()
@@ -1207,6 +1229,12 @@ def _data_graphic_snapshot(shapes_el, it, sid: int, source_id: int, page_h: floa
     for name, value in (("LinXDataGraphicField", it.data_graphic.get("field", "")),
                         ("LinXDataGraphicDisplay", it.data_graphic.get("display", ""))):
         row = _el(sec, "Row", N=name)
+        _cell(row, "Value", value, "STR", _str_formula(value))
+        _cell(row, "Prompt", "")
+    colors = it.data_graphic.get("status_colors", [])
+    if colors:
+        value = json.dumps(colors, ensure_ascii=False, separators=(",", ":"))
+        row = _el(sec, "Row", N="LinXDataGraphicColors")
         _cell(row, "Value", value, "STR", _str_formula(value))
         _cell(row, "Prompt", "")
     _cell(el, "TxtPinX", width / 2)
