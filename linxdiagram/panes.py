@@ -1289,18 +1289,10 @@ class DrawingExplorerPane(QWidget):
             return
         pages = doc.pages if self.all_pages.isChecked() else [active]
         names = {layer.get("name", "") for page in pages for layer in page.layers if layer.get("name")}
-        has_unassigned = False
-        for page in pages:
-            for item in page.all_items():
-                if item.layer:
-                    names.add(item.layer)
-                else:
-                    has_unassigned = True
         current = self.layer_filter.currentData()
         options = [("Tous les calques", self.ALL_LAYERS)]
         options.extend((name, name) for name in sorted(names, key=str.casefold))
-        if has_unassigned:
-            options.append(("Sans calque", self.NO_LAYER))
+        options.append(("Sans calque", self.NO_LAYER))
         self.layer_filter.blockSignals(True)
         try:
             self.layer_filter.clear()
@@ -1310,7 +1302,7 @@ class DrawingExplorerPane(QWidget):
             self.layer_filter.setCurrentIndex(indices[0] if indices else 0)
         finally:
             self.layer_filter.blockSignals(False)
-        self.layer_filter_box.setVisible(bool(names or has_unassigned))
+        self.layer_filter_box.show()
 
     def schedule_refresh(self, *_args) -> None:
         if self.isVisible():
