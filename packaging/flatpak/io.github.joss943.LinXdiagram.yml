@@ -1,0 +1,41 @@
+# Manifeste Flatpak : application isolée dans un bac à sable, SANS accès réseau.
+#   flatpak-builder --user --install build-dir packaging/flatpak/io.github.joss943.LinXdiagram.yml
+app-id: io.github.joss943.LinXdiagram
+runtime: org.kde.Platform
+runtime-version: '6.9'
+sdk: org.kde.Sdk
+base: com.riverbankcomputing.PyQt.BaseApp
+base-version: '6.9'
+command: linxdiagram
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --device=dri
+  # Documents : accès limité aux dossiers usuels ; les autres passent par le portail
+  # de sélection de fichiers. Volontairement aucun --share=network.
+  - --filesystem=xdg-documents
+  - --filesystem=xdg-desktop
+  - --filesystem=xdg-download:ro
+cleanup-commands:
+  - /app/cleanup-BaseApp.sh
+modules:
+  - name: linxdiagram
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/share/linxdiagram /app/bin
+      - cp -R linxdiagram /app/share/linxdiagram/
+      # -P plutôt que -I : PyQt6 est fourni par la BaseApp via PYTHONPATH.
+      - sed "s|@LIBDIR@|/app/share/linxdiagram|; s|@PYFLAGS@|-P|" bin/linxdiagram > /app/bin/linxdiagram
+      - chmod 755 /app/bin/linxdiagram
+      - python3 -m compileall -q /app/share/linxdiagram
+      - install -Dm644 packaging/io.github.joss943.LinXdiagram.desktop /app/share/applications/io.github.joss943.LinXdiagram.desktop
+      - install -Dm644 packaging/io.github.joss943.LinXdiagram.svg /app/share/icons/hicolor/scalable/apps/io.github.joss943.LinXdiagram.svg
+      - install -Dm644 packaging/io.github.joss943.LinXdiagram-mime.xml /app/share/mime/packages/io.github.joss943.LinXdiagram.xml
+      - install -Dm644 packaging/io.github.joss943.LinXdiagram.metainfo.xml /app/share/metainfo/io.github.joss943.LinXdiagram.metainfo.xml
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - .flatpak-builder
+          - build-dir

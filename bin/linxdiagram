@@ -1,0 +1,14 @@
+#!/usr/bin/python3 @PYFLAGS@
+# Lanceur LinXdiagram. « -I » (mode isolé) ou à défaut « -P » : Python n'importe aucun
+# module depuis le dossier courant ni celui du lanceur, ce qui évite le détournement de code.
+import os
+import sys
+
+LIBDIR = "@LIBDIR@"
+if LIBDIR.startswith("@"):  # exécution depuis les sources
+    LIBDIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.insert(0, LIBDIR)
+
+from linxdiagram.app import main  # noqa: E402
+
+sys.exit(main())

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-linxdiagram">
+    <comment>Diagramme LinXdiagram</comment>
+    <comment xml:lang="en">LinXdiagram drawing</comment>
+    <sub-class-of type="application/json"/>
+    <generic-icon name="x-office-drawing"/>
+    <glob pattern="*.lxd"/>
+    <magic priority="60">
+      <match type="string" value="&quot;format&quot;: &quot;linxdiagram" offset="0:64"/>
+    </magic>
+  </mime-type>
+</mime-info>

@@ -1,0 +1,669 @@
+"""Gabarits de formes (l'équivalent des « stencils » Visio).
+
+Chaque forme est décrite par un générateur de géométrie qui reçoit la largeur
+et la hauteur et renvoie deux chemins : le contour (rempli et tracé) et des
+détails optionnels (traits internes). Les points de connexion et la zone de
+texte sont exprimés en coordonnées normalisées (0..1), comme les sections
+« Connections » et « TextXForm » de la ShapeSheet Visio.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from typing import Callable
+
+from PyQt6.QtCore import QPointF, QRectF
+from PyQt6.QtGui import QPainterPath, QTransform
+
+Builder = Callable[[float, float], tuple[QPainterPath, "QPainterPath | None"]]
+
+SIDES = ((0.5, 0.0), (1.0, 0.5), (0.5, 1.0), (0.0, 0.5))
+SIDES_AND_CORNERS = SIDES + ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
+
+
+@dataclass(frozen=True)
+class ShapeDef:
+    type_id: str
+    name: str
+    category: str
+    builder: Builder
+    size_mm: tuple[float, float] = (30.0, 20.0)
+    ports: tuple[tuple[float, float], ...] = SIDES
+    text_rect: tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0)
+    keywords: str = ""
+    style: dict = field(default_factory=dict)
+    text: dict = field(default_factory=dict)
+    label_outside: bool = False
+    outline_visible: bool = True
+    detail_fill: bool = False
+    roundable: bool = False
+    container: bool = False
+    default_text: str = ""
+    cff: str = ""  # élément de diagramme interfonctionnel : lane_h, lane_v, phase_h, phase_v, frame_h, frame_v
+
+
+# ------------------------------------------------------------------ utilitaires
+
+def _fit(path: QPainterPath, w: float, h: float) -> QPainterPath:
+    """Étire un chemin construit dans le carré unité vers la boîte w×h."""
+    return QTransform.fromScale(w, h).map(path)
+
+
+def _unit(fn: Callable[[], tuple[QPainterPath, QPainterPath | None]]) -> Builder:
+    def build(w: float, h: float):
+        outline, detail = fn()
+        return _fit(outline, w, h), (_fit(detail, w, h) if detail is not None else None)
+    return build
+
+
+def _poly_path(points) -> QPainterPath:
+    p = QPainterPath()
+    p.moveTo(*points[0])
+    for pt in points[1:]:
+        p.lineTo(*pt)
+    p.closeSubpath()
+    return p
+
+
+def _poly(points) -> Builder:
+    return _unit(lambda: (_poly_path(points), None))
+
+
+def _lines(*segments) -> QPainterPath:
+    p = QPainterPath()
+    for seg in segments:
+        p.moveTo(*seg[0])
+        for pt in seg[1:]:
+            p.lineTo(*pt)
+    return p
+
+
+def _rect(x, y, w, h) -> QPainterPath:
+    p = QPainterPath()
+    p.addRect(QRectF(x, y, w, h))
+    return p
+
+
+def _rrect(x, y, w, h, r) -> QPainterPath:
+    p = QPainterPath()
+    p.addRoundedRect(QRectF(x, y, w, h), r, r)
+    return p
+
+
+def _ellipse(cx, cy, rx, ry) -> QPainterPath:
+    p = QPainterPath()
+    p.addEllipse(QPointF(cx, cy), rx, ry)
+    return p
+
+
+def _union(*paths: QPainterPath) -> QPainterPath:
+    out = QPainterPath()
+    for p in paths:
+        out = out.united(p)
+    return out.simplified()
+
+
+def regular_polygon(n: int, inner: float | None = None, start: float = -90.0):
+    count = n * 2 if inner else n
+    pts = []
+    for i in range(count):
+        a = math.radians(start + i * 360.0 / count)
+        r = inner if (inner and i % 2) else 1.0
+        pts.append((math.cos(a) * r, math.sin(a) * r))
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
+    return [((x - minx) / (maxx - minx), (y - miny) / (maxy - miny)) for x, y in pts]
+
+
+# ------------------------------------------------------------------- géométries
+
+def rect_builder(w: float, h: float, rounding: float = 0.0):
+    p = QPainterPath()
+    if rounding > 0:
+        r = min(rounding, w / 2, h / 2)
+        p.addRoundedRect(QRectF(0, 0, w, h), r, r)
+    else:
+        p.addRect(QRectF(0, 0, w, h))
+    return p, None
+
+
+def _b_rect(w, h):
+    return rect_builder(w, h)
+
+
+def _b_round(w, h):
+    r = min(w, h) * 0.15
+    return rect_builder(w, h, r)
+
+
+def _b_stadium(w, h):
+    return rect_builder(w, h, min(w, h) / 2)
+
+
+def _b_ellipse(w, h):
+    p = QPainterPath()
+    p.addEllipse(QRectF(0, 0, w, h))
+    return p, None
+
+
+def _cylinder(w, h, rims: int = 0):
+    ry = min(h * 0.12, w * 0.25)
+    p = QPainterPath()
+    p.moveTo(0, ry)
+    p.arcTo(QRectF(0, 0, w, 2 * ry), 180, -180)
+    p.lineTo(w, h - ry)
+    p.arcTo(QRectF(0, h - 2 * ry, w, 2 * ry), 0, -180)
+    p.closeSubpath()
+    d = QPainterPath()
+    d.moveTo(0, ry)
+    d.arcTo(QRectF(0, 0, w, 2 * ry), 180, 180)
+    for i in range(1, rims + 1):
+        y = ry + (h - 2 * ry) * i / (rims + 1)
+        d.moveTo(0, y)
+        d.arcTo(QRectF(0, y - ry, w, 2 * ry), 180, 180)
+    return p, d
+
+
+def _b_cylinder(w, h):
+    return _cylinder(w, h)
+
+
+def _b_database(w, h):
+    return _cylinder(w, h, rims=2)
+
+
+def _b_cube():
+    outline = _poly_path([(0, 0.2), (0.2, 0), (1, 0), (1, 0.8), (0.8, 1), (0, 1)])
+    detail = _lines([(0, 0.2), (0.8, 0.2), (1, 0)], [(0.8, 0.2), (0.8, 1)])
+    return outline, detail
+
+
+def _b_cloud():
+    parts = [(0.25, 0.55, 0.22, 0.28), (0.45, 0.35, 0.25, 0.3), (0.7, 0.38, 0.22, 0.27),
+             (0.8, 0.62, 0.2, 0.25), (0.52, 0.68, 0.3, 0.27), (0.2, 0.7, 0.18, 0.2)]
+    p = _union(*(_ellipse(*c) for c in parts))
+    b = p.boundingRect()
+    t = QTransform().scale(1 / b.width(), 1 / b.height()).translate(-b.left(), -b.top())
+    return t.map(p), None
+
+
+def _b_note():
+    return (_poly_path([(0, 0), (0.8, 0), (1, 0.2), (1, 1), (0, 1)]),
+            _lines([(0.8, 0), (0.8, 0.2), (1, 0.2)]))
+
+
+def _b_callout():
+    body = _rrect(0, 0, 1, 0.78, 0.08)
+    tail = _poly_path([(0.18, 0.7), (0.12, 1.0), (0.42, 0.7)])
+    return _union(body, tail), None
+
+
+def _b_container():
+    return _rect(0, 0, 1, 1), _lines([(0, 0.14), (1, 0.14)])
+
+
+def _b_document_path(x, y, w, h):
+    p = QPainterPath()
+    p.moveTo(x, y)
+    p.lineTo(x + w, y)
+    p.lineTo(x + w, y + 0.85 * h)
+    p.cubicTo(x + 0.6 * w, y + 0.62 * h, x + 0.4 * w, y + 1.15 * h, x, y + 0.85 * h)
+    p.closeSubpath()
+    return p
+
+
+def _b_document():
+    return _b_document_path(0, 0, 1, 1), None
+
+
+def _b_multidoc():
+    return _union(_b_document_path(0.12, 0, 0.88, 0.86), _b_document_path(0.06, 0.07, 0.88, 0.86),
+                  _b_document_path(0, 0.14, 0.88, 0.86)), None
+
+
+def _b_subprocess():
+    return _rect(0, 0, 1, 1), _lines([(0.1, 0), (0.1, 1)], [(0.9, 0), (0.9, 1)])
+
+
+def _b_internal_storage():
+    return _rect(0, 0, 1, 1), _lines([(0.15, 0), (0.15, 1)], [(0, 0.2), (1, 0.2)])
+
+
+def _b_delay(w, h):
+    p = QPainterPath()
+    p.moveTo(0, 0)
+    p.lineTo(w * 0.5, 0)
+    p.arcTo(QRectF(0, 0, w, h), 90, -180)
+    p.lineTo(0, h)
+    p.closeSubpath()
+    return p, None
+
+
+def _b_display(w, h):
+    p = QPainterPath()
+    p.moveTo(0, h / 2)
+    p.lineTo(w * 0.2, 0)
+    p.lineTo(w * 0.8, 0)
+    p.arcTo(QRectF(w * 0.6, 0, w * 0.4, h), 90, -180)
+    p.lineTo(w * 0.2, h)
+    p.closeSubpath()
+    return p, None
+
+
+def _b_annotation():
+    return _rect(0, 0, 1, 1), _lines([(0.2, 0), (0, 0), (0, 1), (0.2, 1)])
+
+
+def _b_server():
+    outline = _rrect(0.2, 0, 0.6, 1, 0.04)
+    detail = _lines([(0.28, 0.12), (0.72, 0.12)], [(0.28, 0.22), (0.72, 0.22)],
+                    [(0.28, 0.32), (0.72, 0.32)], [(0.28, 0.42), (0.72, 0.42)])
+    detail.addEllipse(QPointF(0.5, 0.85), 0.045, 0.035)
+    return outline, detail
+
+
+def _b_pc():
+    monitor = _rrect(0, 0, 1, 0.68, 0.03)
+    stand = _poly_path([(0.42, 0.67), (0.58, 0.67), (0.62, 0.88), (0.38, 0.88)])
+    base = _rrect(0.22, 0.86, 0.56, 0.14, 0.03)
+    detail = _rect(0.06, 0.07, 0.88, 0.53)
+    return _union(monitor, stand, base), detail
+
+
+def _b_laptop():
+    screen = _rrect(0.12, 0, 0.76, 0.68, 0.03)
+    base = _poly_path([(0.06, 0.72), (0.94, 0.72), (1, 0.9), (0, 0.9)])
+    detail = _rect(0.17, 0.06, 0.66, 0.54)
+    detail.addPath(_lines([(0.4, 0.82), (0.6, 0.82)]))
+    return _union(screen, base), detail
+
+
+def _b_router():
+    outline = QPainterPath()
+    outline.moveTo(0, 0.3)
+    outline.arcTo(QRectF(0, 0.05, 1, 0.5), 180, -180)
+    outline.lineTo(1, 0.7)
+    outline.arcTo(QRectF(0, 0.45, 1, 0.5), 0, -180)
+    outline.closeSubpath()
+    detail = QPainterPath()
+    detail.moveTo(0, 0.3)
+    detail.arcTo(QRectF(0, 0.05, 1, 0.5), 180, 180)
+    c = (0.5, 0.3)
+    for dx, dy in ((0.22, 0.09), (-0.22, -0.09), (0.22, -0.09), (-0.22, 0.09)):
+        detail.addPath(_lines([(c[0] + dx * 0.25, c[1] + dy * 0.25), (c[0] + dx, c[1] + dy)]))
+    return outline, detail
+
+
+def _b_switch():
+    outline = _poly_path([(0, 0.35), (0.15, 0), (1, 0), (1, 0.65), (0.85, 1), (0, 1)])
+    detail = _lines([(0, 0.35), (0.85, 0.35), (1, 0)], [(0.85, 0.35), (0.85, 1)],
+                    [(0.12, 0.55), (0.7, 0.55)], [(0.6, 0.48), (0.7, 0.55), (0.6, 0.62)],
+                    [(0.73, 0.82), (0.15, 0.82)], [(0.25, 0.75), (0.15, 0.82), (0.25, 0.89)])
+    return outline, detail
+
+
+def _b_firewall():
+    detail = _lines([(0, 0.25), (1, 0.25)], [(0, 0.5), (1, 0.5)], [(0, 0.75), (1, 0.75)],
+                    [(0.33, 0), (0.33, 0.25)], [(0.66, 0), (0.66, 0.25)],
+                    [(0.17, 0.25), (0.17, 0.5)], [(0.5, 0.25), (0.5, 0.5)], [(0.83, 0.25), (0.83, 0.5)],
+                    [(0.33, 0.5), (0.33, 0.75)], [(0.66, 0.5), (0.66, 0.75)],
+                    [(0.17, 0.75), (0.17, 1)], [(0.5, 0.75), (0.5, 1)], [(0.83, 0.75), (0.83, 1)])
+    return _rect(0, 0, 1, 1), detail
+
+
+def _b_printer():
+    body = _rrect(0, 0.25, 1, 0.5, 0.06)
+    paper_in = _rect(0.2, 0, 0.6, 0.27)
+    paper_out = _poly_path([(0.15, 0.7), (0.85, 0.7), (0.92, 1), (0.08, 1)])
+    detail = _lines([(0.1, 0.62), (0.9, 0.62)], [(0.25, 0.82), (0.75, 0.82)])
+    detail.addEllipse(QPointF(0.86, 0.38), 0.04, 0.04)
+    return _union(body, paper_in, paper_out), detail
+
+
+def _b_phone():
+    detail = _rect(0.26, 0.1, 0.48, 0.7)
+    detail.addEllipse(QPointF(0.5, 0.9), 0.05, 0.04)
+    return _rrect(0.2, 0, 0.6, 1, 0.08), detail
+
+
+def _b_wifi():
+    box = _rrect(0.1, 0.62, 0.8, 0.38, 0.05)
+    antenna = _rect(0.47, 0.3, 0.06, 0.34)
+    detail = QPainterPath()
+    for r in (0.12, 0.22, 0.32):
+        detail.moveTo(0.5 - r * 0.9, 0.3 - r * 0.45)
+        detail.quadTo(0.5, 0.3 - r * 1.25, 0.5 + r * 0.9, 0.3 - r * 0.45)
+    return _union(box, antenna), detail
+
+
+def _b_user():
+    head = _ellipse(0.5, 0.25, 0.22, 0.24)
+    body = QPainterPath()
+    body.moveTo(0.02, 1)
+    body.lineTo(0.02, 0.88)
+    body.cubicTo(0.02, 0.5, 0.98, 0.5, 0.98, 0.88)
+    body.lineTo(0.98, 1)
+    body.closeSubpath()
+    return _union(head, body), None
+
+
+def _b_class():
+    return _rect(0, 0, 1, 1), _lines([(0, 0.3), (1, 0.3)], [(0, 0.65), (1, 0.65)])
+
+
+def _b_actor():
+    detail = _ellipse(0.5, 0.12, 0.2, 0.11)
+    detail.addPath(_lines([(0.5, 0.23), (0.5, 0.62)], [(0.05, 0.36), (0.95, 0.36)],
+                          [(0.08, 1), (0.5, 0.62), (0.92, 1)]))
+    return _rect(0, 0, 1, 1), detail
+
+
+def _b_package():
+    outline = _poly_path([(0, 0), (0.4, 0), (0.4, 0.15), (1, 0.15), (1, 1), (0, 1)])
+    return outline, _lines([(0, 0.15), (0.4, 0.15)])
+
+
+def _b_component():
+    main = _rect(0.1, 0, 0.9, 1)
+    tab1 = _rect(0, 0.2, 0.2, 0.15)
+    tab2 = _rect(0, 0.6, 0.2, 0.15)
+    detail = _rect(0, 0.2, 0.2, 0.15)
+    detail.addRect(QRectF(0, 0.6, 0.2, 0.15))
+    return _union(main, tab1, tab2), detail
+
+
+def _b_final_state():
+    return _ellipse(0.5, 0.5, 0.5, 0.5), _ellipse(0.5, 0.5, 0.3, 0.3)
+
+
+def _b_lollipop():
+    return _ellipse(0.5, 0.5, 0.5, 0.5), None
+
+
+def _arrow_pts(direction: str):
+    right = [(0, 0.25), (0.6, 0.25), (0.6, 0), (1, 0.5), (0.6, 1), (0.6, 0.75), (0, 0.75)]
+    if direction == "right":
+        return right
+    if direction == "left":
+        return [(1 - x, y) for x, y in right]
+    if direction == "down":
+        return [(y, x) for x, y in right]
+    return [(y, 1 - x) for x, y in right]
+
+
+# ------------------------------------------------------------------ catalogue
+
+BASIC = "Formes de base"
+FLOW = "Diagramme de flux"
+ARROWS_CAT = "Flèches"
+ORG = "Organigramme hiérarchique"
+NET = "Réseau"
+UML = "UML / Logiciel"
+CFF = "Diagramme de flux interfonctionnel"
+
+CATEGORIES = (BASIC, FLOW, CFF, ARROWS_CAT, ORG, NET, UML)
+
+_TRI_PORTS = ((0.5, 0.0), (0.75, 0.5), (0.5, 1.0), (0.25, 0.5))
+_LABEL_BELOW = (-0.6, 1.04, 2.2, 0.55)
+_NO_FILL = {"fill": "", "line": "", "themed": False}
+
+_DEFS: list[ShapeDef] = [
+    # Formes de base
+    ShapeDef("basic.rectangle", "Rectangle", BASIC, _b_rect, (35, 22), SIDES_AND_CORNERS,
+             keywords="carré boîte rectangle process", roundable=True),
+    ShapeDef("basic.rounded", "Rectangle arrondi", BASIC, _b_round, (35, 22), SIDES_AND_CORNERS,
+             keywords="arrondi bouton"),
+    ShapeDef("basic.square", "Carré", BASIC, _b_rect, (25, 25), SIDES_AND_CORNERS, roundable=True),
+    ShapeDef("basic.ellipse", "Ellipse", BASIC, _b_ellipse, (35, 22), keywords="ovale rond"),
+    ShapeDef("basic.circle", "Cercle", BASIC, _b_ellipse, (25, 25), keywords="rond disque"),
+    ShapeDef("basic.triangle", "Triangle", BASIC, _poly([(0.5, 0), (1, 1), (0, 1)]), (28, 24),
+             _TRI_PORTS, text_rect=(0.2, 0.4, 0.6, 0.6)),
+    ShapeDef("basic.right_triangle", "Triangle rectangle", BASIC, _poly([(0, 0), (1, 1), (0, 1)]),
+             (25, 25), ((0, 0.5), (0.5, 1), (0.5, 0.5), (0, 1)), text_rect=(0, 0.45, 0.6, 0.55)),
+    ShapeDef("basic.diamond", "Losange", BASIC,
+             _poly([(0.5, 0), (1, 0.5), (0.5, 1), (0, 0.5)]), (30, 25)),
+    ShapeDef("basic.pentagon", "Pentagone", BASIC, _poly(regular_polygon(5)), (26, 25)),
+    ShapeDef("basic.hexagon", "Hexagone", BASIC,
+             _poly([(0.25, 0), (0.75, 0), (1, 0.5), (0.75, 1), (0.25, 1), (0, 0.5)]), (30, 25)),
+    ShapeDef("basic.octagon", "Octogone", BASIC,
+             _poly([(0.3, 0), (0.7, 0), (1, 0.3), (1, 0.7), (0.7, 1), (0.3, 1), (0, 0.7), (0, 0.3)]),
+             (25, 25), keywords="stop"),
+    ShapeDef("basic.star", "Étoile", BASIC, _poly(regular_polygon(5, inner=0.4)), (26, 25),
+             text_rect=(0.25, 0.3, 0.5, 0.45)),
+    ShapeDef("basic.parallelogram", "Parallélogramme", BASIC,
+             _poly([(0.2, 0), (1, 0), (0.8, 1), (0, 1)]), (35, 20)),
+    ShapeDef("basic.trapezoid", "Trapèze", BASIC, _poly([(0.2, 0), (0.8, 0), (1, 1), (0, 1)]), (35, 20)),
+    ShapeDef("basic.cross", "Croix", BASIC,
+             _poly([(0.33, 0), (0.67, 0), (0.67, 0.33), (1, 0.33), (1, 0.67), (0.67, 0.67), (0.67, 1),
+                    (0.33, 1), (0.33, 0.67), (0, 0.67), (0, 0.33), (0.33, 0.33)]), (25, 25),
+             keywords="plus"),
+    ShapeDef("basic.cylinder", "Cylindre", BASIC, _b_cylinder, (25, 30), text_rect=(0, 0.25, 1, 0.75)),
+    ShapeDef("basic.cube", "Cube", BASIC, _unit(_b_cube), (30, 28), text_rect=(0, 0.2, 0.8, 0.8),
+             keywords="boîte 3d"),
+    ShapeDef("basic.cloud", "Nuage", BASIC, _unit(_b_cloud), (40, 26), text_rect=(0.15, 0.2, 0.7, 0.6)),
+    ShapeDef("basic.note", "Note", BASIC, _unit(_b_note), (35, 30), keywords="post-it commentaire",
+             style={"fill": "#fff2cc", "line": "#bf9000", "themed": False}, text={"color": "#3f3f3f"}),
+    ShapeDef("basic.callout", "Bulle", BASIC, _unit(_b_callout), (40, 26),
+             text_rect=(0, 0, 1, 0.78), keywords="légende dialogue"),
+    ShapeDef("basic.container", "Conteneur", BASIC, _unit(_b_container), (90, 60), SIDES_AND_CORNERS,
+             text_rect=(0, 0, 1, 0.14), keywords="groupe zone cadre couloir",
+             style={"fill": "#f2f6fc", "line": "#8eaadb", "themed": False},
+             text={"color": "#1f3864", "bold": True, "valign": "middle", "halign": "left"},
+             container=True, default_text="Conteneur"),
+    ShapeDef("basic.text", "Zone de texte", BASIC, _b_rect, (40, 12), SIDES,
+             keywords="texte étiquette", style=dict(_NO_FILL), text={"color": "#000000"},
+             default_text="Texte"),
+    ShapeDef("basic.title", "Titre", BASIC, _b_rect, (110, 16), SIDES,
+             keywords="titre en-tête", style=dict(_NO_FILL),
+             text={"color": "#1f3864", "size": 22.0, "bold": True}, default_text="Titre"),
+
+    # Diagramme de flux
+    ShapeDef("flow.process", "Processus", FLOW, _b_rect, (35, 22), SIDES_AND_CORNERS,
+             keywords="étape action tâche", roundable=True),
+    ShapeDef("flow.decision", "Décision", FLOW,
+             _poly([(0.5, 0), (1, 0.5), (0.5, 1), (0, 0.5)]), (35, 25), keywords="condition si choix"),
+    ShapeDef("flow.terminator", "Début / Fin", FLOW, _b_stadium, (35, 15),
+             keywords="début fin terminaison départ"),
+    ShapeDef("flow.data", "Données", FLOW, _poly([(0.2, 0), (1, 0), (0.8, 1), (0, 1)]), (35, 20),
+             keywords="entrée sortie io"),
+    ShapeDef("flow.document", "Document", FLOW, _unit(_b_document), (35, 22),
+             text_rect=(0, 0, 1, 0.8)),
+    ShapeDef("flow.multidocument", "Documents multiples", FLOW, _unit(_b_multidoc), (35, 24),
+             text_rect=(0, 0.14, 0.88, 0.7)),
+    ShapeDef("flow.subprocess", "Sous-processus", FLOW, _unit(_b_subprocess), (35, 22),
+             text_rect=(0.1, 0, 0.8, 1), keywords="processus prédéfini fonction"),
+    ShapeDef("flow.database", "Base de données", FLOW, _b_cylinder, (25, 28),
+             text_rect=(0, 0.25, 1, 0.75), keywords="stockage données sgbd"),
+    ShapeDef("flow.preparation", "Préparation", FLOW,
+             _poly([(0.15, 0), (0.85, 0), (1, 0.5), (0.85, 1), (0.15, 1), (0, 0.5)]), (35, 20),
+             keywords="initialisation boucle"),
+    ShapeDef("flow.manual_input", "Entrée manuelle", FLOW,
+             _poly([(0, 0.3), (1, 0), (1, 1), (0, 1)]), (35, 20), text_rect=(0, 0.3, 1, 0.7)),
+    ShapeDef("flow.manual_operation", "Opération manuelle", FLOW,
+             _poly([(0, 0), (1, 0), (0.8, 1), (0.2, 1)]), (35, 20)),
+    ShapeDef("flow.delay", "Délai", FLOW, _b_delay, (30, 20), keywords="attente"),
+    ShapeDef("flow.display", "Affichage", FLOW, _b_display, (35, 20), keywords="écran"),
+    ShapeDef("flow.internal_storage", "Stockage interne", FLOW, _unit(_b_internal_storage), (28, 22),
+             text_rect=(0.15, 0.2, 0.85, 0.8), keywords="mémoire"),
+    ShapeDef("flow.connector", "Connecteur de renvoi", FLOW, _b_ellipse, (12, 12),
+             keywords="cercle référence", text={"size": 9.0}),
+    ShapeDef("flow.offpage", "Renvoi de page", FLOW,
+             _poly([(0, 0), (1, 0), (1, 0.6), (0.5, 1), (0, 0.6)]), (15, 15),
+             text_rect=(0, 0, 1, 0.6), keywords="autre page"),
+    ShapeDef("flow.annotation", "Annotation", FLOW, _unit(_b_annotation), (35, 18),
+             keywords="commentaire remarque", style=dict(_NO_FILL, line="#404040"),
+             text={"color": "#000000", "halign": "left"}, text_rect=(0.05, 0, 0.95, 1),
+             outline_visible=False),
+
+    # Flèches
+    ShapeDef("arrow.right", "Flèche droite", ARROWS_CAT, _poly(_arrow_pts("right")), (35, 18),
+             text_rect=(0, 0.25, 0.75, 0.5)),
+    ShapeDef("arrow.left", "Flèche gauche", ARROWS_CAT, _poly(_arrow_pts("left")), (35, 18),
+             text_rect=(0.25, 0.25, 0.75, 0.5)),
+    ShapeDef("arrow.up", "Flèche haut", ARROWS_CAT, _poly(_arrow_pts("up")), (18, 35),
+             text_rect=(0.25, 0.3, 0.5, 0.7)),
+    ShapeDef("arrow.down", "Flèche bas", ARROWS_CAT, _poly(_arrow_pts("down")), (18, 35),
+             text_rect=(0.25, 0, 0.5, 0.7)),
+    ShapeDef("arrow.double", "Double flèche", ARROWS_CAT,
+             _poly([(0, 0.5), (0.25, 0), (0.25, 0.25), (0.75, 0.25), (0.75, 0), (1, 0.5), (0.75, 1),
+                    (0.75, 0.75), (0.25, 0.75), (0.25, 1)]), (40, 18),
+             text_rect=(0.2, 0.25, 0.6, 0.5)),
+    ShapeDef("arrow.chevron", "Chevron", ARROWS_CAT,
+             _poly([(0, 0), (0.75, 0), (1, 0.5), (0.75, 1), (0, 1), (0.25, 0.5)]), (35, 18),
+             text_rect=(0.2, 0, 0.6, 1), keywords="étape processus"),
+    ShapeDef("arrow.pentagon", "Pentagone fléché", ARROWS_CAT,
+             _poly([(0, 0), (0.78, 0), (1, 0.5), (0.78, 1), (0, 1)]), (35, 18),
+             text_rect=(0, 0, 0.85, 1), keywords="jalon étape"),
+
+    # Organigramme hiérarchique
+    ShapeDef("org.executive", "Cadre dirigeant", ORG, _b_rect, (45, 20), SIDES,
+             style={"fill": "#1f4e79", "line": "#16375a", "themed": False},
+             text={"color": "#ffffff", "bold": True}, default_text="Nom\nDirecteur général",
+             keywords="directeur pdg chef"),
+    ShapeDef("org.manager", "Responsable", ORG, _b_rect, (45, 20), SIDES,
+             style={"fill": "#2e75b6", "line": "#1f4e79", "themed": False},
+             text={"color": "#ffffff"}, default_text="Nom\nResponsable", keywords="manager chef"),
+    ShapeDef("org.employee", "Collaborateur", ORG, _b_rect, (45, 20), SIDES,
+             style={"fill": "#bdd7ee", "line": "#2e75b6", "themed": False},
+             text={"color": "#1f3864"}, default_text="Nom\nFonction", keywords="employé poste"),
+    ShapeDef("org.assistant", "Assistant", ORG, _b_round, (40, 18), SIDES,
+             style={"fill": "#deebf7", "line": "#5b9bd5", "themed": False},
+             text={"color": "#1f3864"}, default_text="Nom\nAssistant"),
+    ShapeDef("org.vacancy", "Poste vacant", ORG, _b_rect, (45, 20), SIDES,
+             style={"fill": "#ffffff", "line": "#7f7f7f", "dash": "dash", "themed": False},
+             text={"color": "#7f7f7f", "italic": True}, default_text="Poste vacant"),
+
+    # Réseau
+    ShapeDef("net.server", "Serveur", NET, _unit(_b_server), (16, 26), text_rect=_LABEL_BELOW,
+             label_outside=True, keywords="serveur machine"),
+    ShapeDef("net.pc", "Ordinateur", NET, _unit(_b_pc), (24, 22), text_rect=_LABEL_BELOW,
+             label_outside=True, keywords="pc poste station"),
+    ShapeDef("net.laptop", "Ordinateur portable", NET, _unit(_b_laptop), (26, 18),
+             text_rect=_LABEL_BELOW, label_outside=True, keywords="portable laptop"),
+    ShapeDef("net.router", "Routeur", NET, _unit(_b_router), (24, 16), text_rect=_LABEL_BELOW,
+             label_outside=True),
+    ShapeDef("net.switch", "Commutateur", NET, _unit(_b_switch), (28, 14), text_rect=_LABEL_BELOW,
+             label_outside=True, keywords="switch"),
+    ShapeDef("net.firewall", "Pare-feu", NET, _unit(_b_firewall), (22, 20), text_rect=_LABEL_BELOW,
+             label_outside=True, keywords="firewall sécurité",
+             style={"fill": "#c55a11", "line": "#843c0c", "themed": False}),
+    ShapeDef("net.cloud", "Internet", NET, _unit(_b_cloud), (34, 22), text_rect=(0.15, 0.2, 0.7, 0.6),
+             keywords="nuage cloud web", default_text="Internet"),
+    ShapeDef("net.database", "Base de données", NET, _b_database, (20, 26), text_rect=_LABEL_BELOW,
+             label_outside=True, keywords="sgbd stockage"),
+    ShapeDef("net.printer", "Imprimante", NET, _unit(_b_printer), (24, 22), text_rect=_LABEL_BELOW,
+             label_outside=True),
+    ShapeDef("net.phone", "Mobile", NET, _unit(_b_phone), (12, 22), text_rect=_LABEL_BELOW,
+             label_outside=True, keywords="téléphone smartphone"),
+    ShapeDef("net.wifi", "Point d'accès Wi-Fi", NET, _unit(_b_wifi), (22, 20), text_rect=_LABEL_BELOW,
+             label_outside=True, keywords="sans fil wifi borne"),
+    ShapeDef("net.user", "Utilisateur", NET, _unit(_b_user), (18, 20), text_rect=_LABEL_BELOW,
+             label_outside=True, keywords="personne client"),
+
+    # UML / Logiciel
+    ShapeDef("uml.class", "Classe", UML, _unit(_b_class), (40, 35), SIDES_AND_CORNERS,
+             text_rect=(0, 0, 1, 0.3), text={"bold": True}, default_text="Classe"),
+    ShapeDef("uml.actor", "Acteur", UML, _unit(_b_actor), (12, 24), text_rect=_LABEL_BELOW,
+             label_outside=True, outline_visible=False, keywords="utilisateur personnage",
+             default_text="Acteur"),
+    ShapeDef("uml.usecase", "Cas d'utilisation", UML, _b_ellipse, (40, 20),
+             keywords="use case fonctionnalité"),
+    ShapeDef("uml.note", "Note UML", UML, _unit(_b_note), (35, 25),
+             style={"fill": "#fff2cc", "line": "#7f6000", "themed": False}, text={"color": "#3f3f3f"}),
+    ShapeDef("uml.package", "Paquetage", UML, _unit(_b_package), (40, 30),
+             text_rect=(0, 0.15, 1, 0.85), keywords="package module"),
+    ShapeDef("uml.component", "Composant", UML, _unit(_b_component), (40, 25),
+             text_rect=(0.2, 0, 0.8, 1), keywords="module service"),
+    ShapeDef("uml.node", "Nœud", UML, _unit(_b_cube), (35, 30), text_rect=(0, 0.2, 0.8, 0.8),
+             keywords="machine déploiement"),
+    ShapeDef("uml.state", "État", UML, _b_round, (35, 18), keywords="statut"),
+    ShapeDef("uml.initial", "État initial", UML, _b_ellipse, (8, 8),
+             style={"fill": "#000000", "line": "#000000", "themed": False}, keywords="début"),
+    ShapeDef("uml.final", "État final", UML, _unit(_b_final_state), (9, 9),
+             style={"fill": "#ffffff", "line": "#000000", "themed": False}, detail_fill=True,
+             keywords="fin"),
+    ShapeDef("uml.interface", "Interface", UML, _unit(_b_lollipop), (8, 8), text_rect=(-2, 1.1, 5, 1.5),
+             label_outside=True, keywords="lollipop api"),
+]
+
+_CFF_STYLE = {"fill": "#dce6f2", "line": "#7f9cc9", "themed": False}
+_CFF_TEXT = {"color": "#1f3864", "size": 12.0}
+_DEFS += [
+    ShapeDef("cff.lane_h", "Couloir", CFF, _b_rect, (230, 35), (), keywords="couloir swimlane fonction acteur "
+             "interfonctionnel horizontal", style=dict(_CFF_STYLE), text=dict(_CFF_TEXT), container=True,
+             default_text="Fonction", cff="lane_h"),
+    ShapeDef("cff.lane_v", "Couloir vertical", CFF, _b_rect, (40, 150), (), keywords="couloir swimlane fonction "
+             "interfonctionnel vertical colonne", style=dict(_CFF_STYLE), text=dict(_CFF_TEXT), container=True,
+             default_text="Fonction", cff="lane_v"),
+    ShapeDef("cff.phase_h", "Séparateur", CFF, _b_rect, (60, 80), (), keywords="séparateur phase étape "
+             "jalon interfonctionnel", style={"fill": "#eef2f9", "line": "#7f9cc9", "themed": False},
+             text=dict(_CFF_TEXT), container=True, default_text="Phase", cff="phase_h"),
+    ShapeDef("cff.phase_v", "Séparateur vertical", CFF, _b_rect, (150, 50), (), keywords="séparateur phase "
+             "interfonctionnel vertical", style={"fill": "#eef2f9", "line": "#7f9cc9", "themed": False},
+             text=dict(_CFF_TEXT), container=True, default_text="Phase", cff="phase_v"),
+    ShapeDef("cff.frame_h", "Cadre", CFF, _b_rect, (230, 115), (),
+             keywords="cadre titre interfonctionnel couloirs horizontal", style=dict(_CFF_STYLE),
+             text={"color": "#1f3864", "size": 14.0, "bold": True}, container=True,
+             default_text="Titre du diagramme", cff="frame_h"),
+    ShapeDef("cff.frame_v", "Cadre vertical", CFF, _b_rect, (130, 160), (),
+             keywords="cadre titre interfonctionnel couloirs vertical", style=dict(_CFF_STYLE),
+             text={"color": "#1f3864", "size": 14.0, "bold": True}, container=True,
+             default_text="Titre du diagramme", cff="frame_v"),
+]
+
+# Formes non présentées dans les gabarits mais nécessaires (images, import VSDX).
+_HIDDEN: list[ShapeDef] = [
+    ShapeDef("special.image", "Image", "", _b_rect, (40, 30), SIDES_AND_CORNERS,
+             style=dict(_NO_FILL), text_rect=_LABEL_BELOW, label_outside=True),
+    ShapeDef("special.custom", "Forme personnalisée", "", _b_rect, (30, 20), SIDES_AND_CORNERS),
+]
+
+SHAPES: dict[str, ShapeDef] = {d.type_id: d for d in _DEFS + _HIDDEN}
+FALLBACK_TYPE = "basic.rectangle"
+
+
+def get(type_id: str) -> ShapeDef:
+    return SHAPES.get(type_id) or SHAPES[FALLBACK_TYPE]
+
+
+def by_category(category: str) -> list[ShapeDef]:
+    return [d for d in _DEFS if d.category == category]
+
+
+def search(query: str) -> list[ShapeDef]:
+    q = query.strip().lower()
+    if not q:
+        return []
+    out = []
+    for d in _DEFS:
+        hay = f"{d.name} {d.keywords} {d.category}".lower()
+        if all(word in hay for word in q.split()):
+            out.append(d)
+    return out
+
+
+def custom_path(commands: list, w: float, h: float) -> QPainterPath:
+    """Chemin d'une forme personnalisée (géométrie importée d'un fichier Visio).
+
+    Commandes normalisées : ["M",x,y] ["L",x,y] ["Q",x1,y1,x,y] ["C",x1,y1,x2,y2,x,y]
+    ["E",cx,cy,rx,ry] ["Z"].
+    """
+    p = QPainterPath()
+    for cmd in commands:
+        op = cmd[0]
+        v = cmd[1:]
+        if op == "M":
+            p.moveTo(v[0] * w, v[1] * h)
+        elif op == "L":
+            p.lineTo(v[0] * w, v[1] * h)
+        elif op == "Q":
+            p.quadTo(v[0] * w, v[1] * h, v[2] * w, v[3] * h)
+        elif op == "C":
+            p.cubicTo(v[0] * w, v[1] * h, v[2] * w, v[3] * h, v[4] * w, v[5] * h)
+        elif op == "E":
+            p.addEllipse(QPointF(v[0] * w, v[1] * h), abs(v[2]) * w, abs(v[3]) * h)
+        elif op == "Z":
+            p.closeSubpath()
+    return p

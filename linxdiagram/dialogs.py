@@ -1,0 +1,741 @@
+"""Boîtes de dialogue : mot de passe, export d'image, ShapeSheet, raccourcis, récupération."""
+
+from __future__ import annotations
+
+import copy
+import os
+import time
+
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+                             QHBoxLayout, QPushButton,
+                             QFormLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
+                             QListWidgetItem, QProgressBar, QSpinBox, QTableWidget,
+                             QTableWidgetItem, QVBoxLayout)
+
+from . import security
+from .fileformat import clean_shape_style, clean_text_style
+from .units import PX_PER_INCH
+
+
+class PasswordDialog(QDialog):
+    """Saisie (ouverture) ou définition (chiffrement) d'un mot de passe."""
+
+    def __init__(self, parent, mode: str = "enter", filename: str = "", error: str = ""):
+        super().__init__(parent)
+        self.mode = mode
+        self.setWindowTitle("Mot de passe" if mode == "enter" else "Chiffrer avec un mot de passe")
+        self.setMinimumWidth(420)
+        lay = QVBoxLayout(self)
+        if mode == "enter":
+            intro = f"Le document « {filename} » est protégé.\nSaisissez son mot de passe :"
+        else:
+            intro = ("Le document sera chiffré (AES-256-GCM, clé dérivée par scrypt).\n"
+                     "Attention : sans le mot de passe, il sera impossible de le récupérer.")
+        lab = QLabel(intro)
+        lab.setWordWrap(True)
+        lay.addWidget(lab)
+        if error:
+            err = QLabel(error)
+            err.setStyleSheet("color: #dc2626; font-weight: 600;")
+            lay.addWidget(err)
+        form = QFormLayout()
+        self.pw = QLineEdit()
+        self.pw.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("Mot de passe", self.pw)
+        self.confirm = QLineEdit()
+        self.confirm.setEchoMode(QLineEdit.EchoMode.Password)
+        self.strength = QProgressBar()
+        self.strength.setRange(0, 4)
+        self.strength.setTextVisible(True)
+        self.strength.setFormat("")
+        if mode == "set":
+            form.addRow("Confirmation", self.confirm)
+            form.addRow("Robustesse", self.strength)
+        lay.addLayout(form)
+        self.show_pw = QCheckBox("Afficher le mot de passe")
+        self.show_pw.toggled.connect(self._toggle)
+        lay.addWidget(self.show_pw)
+        self.msg = QLabel("")
+        self.msg.setStyleSheet("color: #dc2626;")
+        lay.addWidget(self.msg)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                   QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self._accept)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
+        self.pw.textChanged.connect(self._update_strength)
+        self._update_strength("")
+
+    def _toggle(self, on: bool) -> None:
+        mode = QLineEdit.EchoMode.Normal if on else QLineEdit.EchoMode.Password
+        self.pw.setEchoMode(mode)
+        self.confirm.setEchoMode(mode)
+
+    def _update_strength(self, text: str) -> None:
+        score, label = security.password_strength(text)
+        self.strength.setValue(score)
+        self.strength.setFormat(label)
+        colors = ["#dc2626", "#dc2626", "#f59e0b", "#16a34a", "#15803d"]
+        self.strength.setStyleSheet(f"QProgressBar::chunk {{ background: {colors[score]}; }}")
+
+    def _accept(self) -> None:
+        if self.mode == "set":
+            if len(self.pw.text()) < 8:
+                self.msg.setText("Utilisez au moins 8 caractères.")
+                return
+            if self.pw.text() != self.confirm.text():
+                self.msg.setText("Les deux mots de passe ne correspondent pas.")
+                return
+        elif not self.pw.text():
+            return
+        self.accept()
+
+    def password(self) -> str:
+        return self.pw.text()
+
+
+class ImageExportDialog(QDialog):
+    def __init__(self, parent, has_selection: bool, jpeg: bool):
+        super().__init__(parent)
+        self.setWindowTitle("Exporter en image")
+        form = QFormLayout(self)
+        self.zone = QComboBox()
+        self.zone.addItem("Page entière", "page")
+        self.zone.addItem("Dessin (ajusté au contenu)", "drawing")
+        if has_selection:
+            self.zone.addItem("Sélection", "selection")
+        form.addRow("Zone", self.zone)
+        self.dpi = QComboBox()
+        for d in (96, 150, 200, 300, 600):
+            self.dpi.addItem(f"{d} ppp", d)
+        self.dpi.setCurrentIndex(1)
+        form.addRow("Résolution", self.dpi)
+        self.transparent = QCheckBox("Fond transparent")
+        self.transparent.setEnabled(not jpeg)
+        form.addRow("", self.transparent)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                   QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+
+    def options(self) -> dict:
+        return {"mode": self.zone.currentData(), "dpi": self.dpi.currentData(),
+                "transparent": self.transparent.isChecked()}
+
+
+class PropertiesDialog(QDialog):
+    FIELDS = (("title", "Titre"), ("subject", "Objet"), ("author", "Auteur"),
+              ("company", "Société"), ("keywords", "Mots-clés"))
+
+    def __init__(self, parent, props: dict):
+        super().__init__(parent)
+        self.setWindowTitle("Propriétés du document")
+        self.setMinimumWidth(420)
+        form = QFormLayout(self)
+        self.edits = {}
+        for key, label in self.FIELDS:
+            e = QLineEdit(props.get(key, ""))
+            e.setMaxLength(300)
+            self.edits[key] = e
+            form.addRow(label, e)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                   QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+
+    def values(self) -> dict:
+        return {k: security.clean_line(e.text(), 300) for k, e in self.edits.items()}
+
+
+# ------------------------------------------------------------------------ ShapeSheet
+
+def _yn(v: bool) -> str:
+    return "1" if v else "0"
+
+
+class ShapeSheetDialog(QDialog):
+    """Vue « ShapeSheet » : les cellules Visio de la forme, éditables en valeurs.
+
+    Pour la sécurité, seules des valeurs littérales sont acceptées : aucune
+    formule n'est interprétée.
+    """
+
+    def __init__(self, parent, scene, shape):
+        super().__init__(parent)
+        self.scene = scene
+        self.shape = shape
+        self.setWindowTitle(f"ShapeSheet — {shape.sdef.name}")
+        self.resize(520, 600)
+        lay = QVBoxLayout(self)
+        info = QLabel("Cellules au format Visio (pouces, origine en bas à gauche de la page). "
+                      "Modifiez une valeur puis validez. Les formules ne sont pas acceptées.")
+        info.setWordWrap(True)
+        lay.addWidget(info)
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["Section", "Cellule", "Valeur"])
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        lay.addWidget(self.table, 1)
+        self.msg = QLabel("")
+        self.msg.setStyleSheet("color: #dc2626;")
+        lay.addWidget(self.msg)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                   QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self._apply)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
+        self._fill()
+
+    def _cells(self) -> list[tuple[str, str, str, bool]]:
+        st = self.shape.state()
+        ph = self.scene.page_h
+        s, ts = st["style"], st["text_style"]
+        style_bits = (1 if ts["bold"] else 0) | (2 if ts["italic"] else 0) | (4 if ts["underline"] else 0)
+        return [
+            ("Shape Transform", "PinX", f"{st['x'] / PX_PER_INCH:.4f}", True),
+            ("Shape Transform", "PinY", f"{(ph - st['y']) / PX_PER_INCH:.4f}", True),
+            ("Shape Transform", "Width", f"{st['w'] / PX_PER_INCH:.4f}", True),
+            ("Shape Transform", "Height", f"{st['h'] / PX_PER_INCH:.4f}", True),
+            ("Shape Transform", "LocPinX", f"{st['w'] / 2 / PX_PER_INCH:.4f}", False),
+            ("Shape Transform", "LocPinY", f"{st['h'] / 2 / PX_PER_INCH:.4f}", False),
+            ("Shape Transform", "Angle", f"{-st['rotation']:.2f} deg", True),
+            ("Shape Transform", "FlipX", _yn(st["flip_h"]), True),
+            ("Shape Transform", "FlipY", _yn(st["flip_v"]), True),
+            ("Line Format", "LineWeight", f"{s['line_width'] * 72 / PX_PER_INCH:.2f} pt", True),
+            ("Line Format", "LineColor", s["line"] or "Themed", True),
+            ("Line Format", "LinePattern",
+             str({"solid": 1, "dash": 2, "dot": 3, "dashdot": 4}[s["dash"]] if s["line"] else 0), True),
+            ("Line Format", "Rounding", f"{s['rounding']:.2f} mm", True),
+            ("Fill Format", "FillForegnd", s["fill"] or "Themed", True),
+            ("Fill Format", "FillPattern", _yn(bool(s["fill"])), False),
+            ("Fill Format", "FillForegndTrans", f"{s['transparency']:.0f}%", True),
+            ("Character", "Font", ts["font"], True),
+            ("Character", "Size", f"{ts['size']:.1f} pt", True),
+            ("Character", "Color", ts["color"], True),
+            ("Character", "Style", str(style_bits), True),
+            ("Paragraph", "HorzAlign", str({"left": 0, "center": 1, "right": 2}[ts["halign"]]), True),
+            ("Text Block Format", "VerticalAlign", str({"top": 0, "middle": 1, "bottom": 2}[ts["valign"]]), True),
+            ("User-defined Cells", "User.LinXType", st["type"], False),
+        ] + [("Shape Data", f"Prop.{k}", v, False) for k, v in st["data"].items()]
+
+    def _fill(self) -> None:
+        cells = self._cells()
+        self.table.setRowCount(len(cells))
+        for r, (sec, name, val, editable) in enumerate(cells):
+            for c, text in enumerate((sec, name, val)):
+                it = QTableWidgetItem(text)
+                if c < 2 or not editable:
+                    it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    if c == 2:
+                        it.setForeground(QColor("#6b7280"))
+                self.table.setItem(r, c, it)
+        self.table.resizeColumnsToContents()
+
+    @staticmethod
+    def _number(text: str) -> float:
+        t = text.strip().lower()
+        for unit in ("deg", "pt", "mm", "%", "in"):
+            if t.endswith(unit):
+                t = t[: -len(unit)].strip()
+        v = float(t.replace(",", "."))  # une formule n'est jamais un nombre : refusée
+        if v != v or v in (float("inf"), float("-inf")):
+            raise ValueError("valeur")
+        return v
+
+    def _apply(self) -> None:
+        st = copy.deepcopy(self.shape.state())
+        ph = self.scene.page_h
+        try:
+            for r in range(self.table.rowCount()):
+                name = self.table.item(r, 1).text()
+                val = self.table.item(r, 2).text().strip()
+                if name == "PinX":
+                    st["x"] = self._number(val) * PX_PER_INCH
+                elif name == "PinY":
+                    st["y"] = ph - self._number(val) * PX_PER_INCH
+                elif name == "Width":
+                    st["w"] = max(1.0, self._number(val) * PX_PER_INCH)
+                elif name == "Height":
+                    st["h"] = max(1.0, self._number(val) * PX_PER_INCH)
+                elif name == "Angle":
+                    st["rotation"] = -self._number(val)
+                elif name == "FlipX":
+                    st["flip_h"] = val == "1"
+                elif name == "FlipY":
+                    st["flip_v"] = val == "1"
+                elif name == "LineWeight":
+                    st["style"]["line_width"] = self._number(val) * PX_PER_INCH / 72
+                elif name == "LineColor" and val != "Themed":
+                    st["style"]["line"] = val
+                elif name == "LinePattern":
+                    p = int(self._number(val))
+                    if p == 0:
+                        st["style"]["line"] = ""
+                    else:
+                        st["style"]["dash"] = {1: "solid", 2: "dash", 3: "dot", 4: "dashdot"}.get(p, "solid")
+                elif name == "Rounding":
+                    st["style"]["rounding"] = self._number(val)
+                elif name == "FillForegnd" and val != "Themed":
+                    st["style"]["fill"] = val
+                elif name == "FillForegndTrans":
+                    st["style"]["transparency"] = self._number(val)
+                elif name == "Font":
+                    st["text_style"]["font"] = security.clean_line(val, 100)
+                elif name == "Size":
+                    st["text_style"]["size"] = self._number(val)
+                elif name == "Color":
+                    st["text_style"]["color"] = val
+                elif name == "Style":
+                    bits = int(self._number(val))
+                    st["text_style"].update(bold=bool(bits & 1), italic=bool(bits & 2),
+                                            underline=bool(bits & 4))
+                elif name == "HorzAlign":
+                    st["text_style"]["halign"] = ("left", "center", "right")[min(max(int(self._number(val)), 0), 2)]
+                elif name == "VerticalAlign":
+                    st["text_style"]["valign"] = ("top", "middle", "bottom")[min(max(int(self._number(val)), 0), 2)]
+        except (ValueError, TypeError):
+            self.msg.setText(f"Valeur invalide pour {name} : seules des valeurs numériques "
+                             "ou des couleurs #RRGGBB sont acceptées.")
+            return
+        # Validation stricte identique à celle des fichiers.
+        st["style"] = clean_shape_style(st["style"], self.shape.style)
+        st["style"]["themed"] = False
+        st["text_style"] = clean_text_style(st["text_style"], self.shape.text_style)
+        target = st
+
+        def apply(it, s):
+            s.update(target)
+        self.scene.modify([self.shape], apply, "Modifier la ShapeSheet")
+        self.accept()
+
+
+# ------------------------------------------------------------------------ divers
+
+SHORTCUTS = [
+    ("Outils", [("Ctrl+1", "Outil Pointeur"), ("Ctrl+2", "Outil Texte"), ("Ctrl+3", "Outil Connecteur"),
+                ("Ctrl+6", "Outil Ligne"), ("Ctrl+8", "Outil Rectangle"), ("Ctrl+9", "Outil Ellipse"),
+                ("Échap", "Revenir au Pointeur / désélectionner")]),
+    ("Édition", [("Ctrl+Z / Ctrl+Y", "Annuler / Rétablir"), ("Ctrl+X / C / V", "Couper / Copier / Coller"),
+                 ("Ctrl+D", "Dupliquer"), ("Suppr", "Supprimer"), ("Ctrl+A", "Tout sélectionner"),
+                 ("F2 ou saisie directe", "Modifier le texte de la forme"), ("Ctrl+F", "Rechercher"),
+                 ("Flèches / Maj+Flèches", "Déplacer d'un pas de grille / d'un pixel")]),
+    ("Organiser", [("Ctrl+Maj+F / Ctrl+Maj+B", "Premier plan / Arrière-plan"),
+                   ("Ctrl+Maj+G / Ctrl+Maj+U", "Grouper / Dissocier"),
+                   ("Ctrl+R / Ctrl+L", "Rotation droite / gauche"),
+                   ("Ctrl+H / Ctrl+J", "Retourner horizontalement / verticalement")]),
+    ("Texte", [("Ctrl+B / I / U", "Gras / Italique / Souligné"),
+               ("Ctrl+Maj+L / C / R", "Aligner à gauche / centrer / à droite"),
+               ("Ctrl+Maj+T / M / V", "Texte en haut / au milieu / en bas"),
+               ("Ctrl+Maj+> / <", "Agrandir / réduire la police"), ("Ctrl+K", "Lien hypertexte")]),
+    ("Affichage", [("Ctrl+molette", "Zoom"), ("Clic milieu ou Espace+glisser", "Se déplacer"),
+                   ("Ctrl+Maj+W", "Ajuster la page à la fenêtre"), ("Ctrl+0", "Zoom 100 %"),
+                   ("Ctrl+Pg.Suiv / Pg.Préc", "Page suivante / précédente"), ("F5", "Plein écran"),
+                   ("Ctrl+F1", "Réduire le ruban")]),
+    ("Fichier", [("Ctrl+N", "Nouveau"), ("Ctrl+O", "Ouvrir"), ("Ctrl+S", "Enregistrer"),
+                 ("F12", "Enregistrer sous"), ("Ctrl+P", "Imprimer"), ("Ctrl+W", "Fermer")]),
+]
+
+
+class ShortcutsDialog(QDialog):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowTitle("Raccourcis clavier")
+        self.resize(560, 620)
+        lay = QVBoxLayout(self)
+        table = QTableWidget(0, 2)
+        table.setHorizontalHeaderLabels(["Touches", "Action"])
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        for group, entries in SHORTCUTS:
+            r = table.rowCount()
+            table.insertRow(r)
+            head = QTableWidgetItem(group)
+            f = head.font()
+            f.setBold(True)
+            head.setFont(f)
+            table.setItem(r, 0, head)
+            for keys, action in entries:
+                r = table.rowCount()
+                table.insertRow(r)
+                table.setItem(r, 0, QTableWidgetItem(keys))
+                table.setItem(r, 1, QTableWidgetItem(action))
+        table.resizeColumnToContents(0)
+        lay.addWidget(table)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
+
+
+class RecoveryDialog(QDialog):
+    def __init__(self, parent, files: list[str]):
+        super().__init__(parent)
+        self.setWindowTitle("Récupération de documents")
+        self.setMinimumWidth(480)
+        lay = QVBoxLayout(self)
+        lab = QLabel("LinXdiagram s'est fermé de façon inattendue. Les documents suivants ont été "
+                     "enregistrés automatiquement. Cochez ceux à récupérer :")
+        lab.setWordWrap(True)
+        lay.addWidget(lab)
+        self.list = QListWidget()
+        for f in files:
+            it = QListWidgetItem(f"Récupération du {time.strftime('%d/%m/%Y à %H:%M', time.localtime(os.path.getmtime(f)))}")
+            it.setData(Qt.ItemDataRole.UserRole, f)
+            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            it.setCheckState(Qt.CheckState.Checked)
+            self.list.addItem(it)
+        lay.addWidget(self.list)
+        buttons = QDialogButtonBox()
+        buttons.addButton("Récupérer", QDialogButtonBox.ButtonRole.AcceptRole)
+        buttons.addButton("Supprimer tout", QDialogButtonBox.ButtonRole.DestructiveRole).clicked.connect(
+            self._discard)
+        buttons.accepted.connect(self.accept)
+        lay.addWidget(buttons)
+        self.discard_all = False
+
+    def _discard(self) -> None:
+        self.discard_all = True
+        self.reject()
+
+    def selected(self) -> list[str]:
+        out = []
+        for i in range(self.list.count()):
+            it = self.list.item(i)
+            if it.checkState() == Qt.CheckState.Checked:
+                out.append(it.data(Qt.ItemDataRole.UserRole))
+        return out
+
+
+class OptionsDialog(QDialog):
+    def __init__(self, parent, settings):
+        super().__init__(parent)
+        self.settings = settings
+        self.setWindowTitle("Options de LinXdiagram")
+        self.setMinimumWidth(460)
+        form = QFormLayout(self)
+        self.recent = QCheckBox("Mémoriser les documents récents")
+        self.recent.setChecked(settings.value("privacy/remember_recent", True, type=bool))
+        form.addRow("Confidentialité", self.recent)
+        self.autosave = QSpinBox()
+        self.autosave.setRange(0, 60)
+        self.autosave.setSuffix(" min")
+        self.autosave.setSpecialValueText("Désactivée")
+        self.autosave.setValue(settings.value("autosave/minutes", 3, type=int))
+        form.addRow("Récupération automatique", self.autosave)
+        self.theme = QComboBox()
+        for key, label in (("light", "En couleur"), ("dark", "Noir"),
+                           ("system", "Utiliser le paramètre système")):
+            self.theme.addItem(label, key)
+        self.theme.setCurrentIndex(max(0, self.theme.findData(settings.value("ui/theme", "light"))))
+        self.native = QCheckBox("Utiliser la barre de titre du système")
+        self.native.setChecked(settings.value("ui/native_titlebar", False, type=bool))
+        form.addRow("Fenêtre", self.native)
+        self.user = QLineEdit(settings.value("user/name", ""))
+        self.user.setPlaceholderText("Nom affiché dans les commentaires")
+        form.addRow("Nom d'utilisateur", self.user)
+        form.addRow("Thème de l'interface", self.theme)
+        self.delete_conn = QCheckBox("Supprimer les connecteurs avec les formes reliées")
+        self.delete_conn.setChecked(True)
+        self.delete_conn.setEnabled(False)
+        form.addRow("Édition", self.delete_conn)
+        note = QLabel("Le thème et la barre de titre s'appliquent au prochain démarrage.")
+        note.setObjectName("hint")
+        form.addRow("", note)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                   QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+
+    def save(self) -> None:
+        self.settings.setValue("privacy/remember_recent", self.recent.isChecked())
+        self.settings.setValue("autosave/minutes", self.autosave.value())
+        self.settings.setValue("ui/theme", self.theme.currentData())
+        self.settings.setValue("ui/native_titlebar", self.native.isChecked())
+        self.settings.setValue("user/name", security.clean_line(self.user.text(), 100))
+        if not self.recent.isChecked():
+            self.settings.setValue("recent/files", [])
+
+
+# ------------------------------------------------------------------------ dialogues Visio
+
+def _buttons(dlg, ok_text: str = "OK") -> QDialogButtonBox:
+    b = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+    b.button(QDialogButtonBox.StandardButton.Ok).setText(ok_text)
+    b.button(QDialogButtonBox.StandardButton.Cancel).setText("Annuler")
+    b.accepted.connect(dlg.accept)
+    b.rejected.connect(dlg.reject)
+    return b
+
+
+class ZoomDialog(QDialog):
+    PRESETS = ((4.0, "400 %"), (2.0, "200 %"), (1.5, "150 %"), (1.0, "100 %"), (0.75, "75 %"),
+               (0.5, "50 %"), ("page", "Page entière"), ("width", "Largeur de page"))
+
+    def __init__(self, parent, current: float):
+        super().__init__(parent)
+        from PyQt6.QtWidgets import QButtonGroup, QRadioButton
+        self.setWindowTitle("Zoom")
+        lay = QVBoxLayout(self)
+        self.group = QButtonGroup(self)
+        self.choice = None
+        for i, (val, label) in enumerate(self.PRESETS):
+            rb = QRadioButton(label)
+            self.group.addButton(rb, i)
+            lay.addWidget(rb)
+            if isinstance(val, float) and abs(val - current) < 1e-3:
+                rb.setChecked(True)
+        row = QFormLayout()
+        self.percent = QSpinBox()
+        self.percent.setRange(10, 800)
+        self.percent.setSuffix(" %")
+        self.percent.setValue(round(current * 100))
+        row.addRow("Pourcentage :", self.percent)
+        lay.addLayout(row)
+        lay.addWidget(_buttons(self))
+        self.group.idClicked.connect(self._preset)
+
+    def _preset(self, i: int) -> None:
+        val = self.PRESETS[i][0]
+        if isinstance(val, float):
+            self.percent.setValue(round(val * 100))
+
+    def result_value(self):
+        i = self.group.checkedId()
+        if i >= 0 and not isinstance(self.PRESETS[i][0], float):
+            return self.PRESETS[i][0]
+        return self.percent.value() / 100.0
+
+
+class FindReplaceDialog(QDialog):
+    """Rechercher / Remplacer dans le texte des formes (page ou document)."""
+
+    def __init__(self, parent, window, replace: bool = False):
+        super().__init__(parent)
+        self.win = window
+        self.setWindowTitle("Rechercher et remplacer" if replace else "Rechercher")
+        self.setMinimumWidth(420)
+        form = QFormLayout(self)
+        self.find = QLineEdit()
+        form.addRow("Rechercher :", self.find)
+        self.repl = QLineEdit()
+        if replace:
+            form.addRow("Remplacer par :", self.repl)
+        self.case = QCheckBox("Respecter la casse")
+        self.all_pages = QCheckBox("Toutes les pages")
+        form.addRow("", self.case)
+        form.addRow("", self.all_pages)
+        self.msg = QLabel("")
+        form.addRow("", self.msg)
+        bb = QDialogButtonBox()
+        b_find = bb.addButton("Rechercher", QDialogButtonBox.ButtonRole.ActionRole)
+        b_find.clicked.connect(self._find)
+        if replace:
+            b_all = bb.addButton("Remplacer tout", QDialogButtonBox.ButtonRole.ActionRole)
+            b_all.clicked.connect(self._replace_all)
+        bb.addButton("Fermer", QDialogButtonBox.ButtonRole.RejectRole).clicked.connect(self.reject)
+        form.addRow(bb)
+
+    def _pages(self):
+        return self.win.doc.pages if self.all_pages.isChecked() else [self.win.scene()]
+
+    def _match(self, text: str, q: str) -> bool:
+        return (q in text) if self.case.isChecked() else (q.lower() in text.lower())
+
+    def _find(self) -> None:
+        q = self.find.text()
+        if not q:
+            return
+        total = 0
+        for sc in self._pages():
+            hits = [it for it in sc.all_items() if self._match(it.text, q)]
+            if hits and sc is self.win.scene():
+                sc.select_items(hits)
+            total += len(hits)
+        self.msg.setText(f"{total} forme(s) trouvée(s).")
+
+    def _replace_all(self) -> None:
+        import re as _re
+        q, r = self.find.text(), security.clean_text(self.repl.text(), 2000)
+        if not q:
+            return
+        flags = 0 if self.case.isChecked() else _re.IGNORECASE
+        pattern = _re.compile(_re.escape(q), flags)
+        total = 0
+        self.win.doc.undo_stack.beginMacro("Remplacer tout")
+        for sc in self._pages():
+            items = [it for it in sc.all_items() if pattern.search(it.text)]
+            total += len(items)
+
+            def rep(it, st):
+                st["text"] = pattern.sub(lambda _m: r, st["text"])
+            if items:
+                sc.modify(items, rep, "Remplacer")
+        self.win.doc.undo_stack.endMacro()
+        self.msg.setText(f"{total} forme(s) modifiée(s).")
+
+
+class LayersDialog(QDialog):
+    """Propriétés des calques : nom, visible, imprimable, verrouillé."""
+
+    COLS = ("Nom", "Visible", "Imprimable", "Verrouillé", "Objets")
+
+    def __init__(self, parent, scene):
+        super().__init__(parent)
+        self.scene = scene
+        self.setWindowTitle("Propriétés des calques")
+        self.resize(520, 360)
+        lay = QVBoxLayout(self)
+        self.table = QTableWidget(0, len(self.COLS))
+        self.table.setHorizontalHeaderLabels(self.COLS)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.table.verticalHeader().setVisible(False)
+        lay.addWidget(self.table, 1)
+        counts: dict[str, int] = {}
+        for it in scene.all_items():
+            counts[it.layer] = counts.get(it.layer, 0) + 1
+        for layer in scene.layers:
+            self._add_row(layer, counts.get(layer["name"], 0))
+        row = QHBoxLayout()
+        add = QPushButton("Nouveau…")
+        add.clicked.connect(self._new)
+        rem = QPushButton("Supprimer")
+        rem.clicked.connect(lambda: self.table.removeRow(self.table.currentRow()))
+        row.addWidget(add)
+        row.addWidget(rem)
+        row.addStretch(1)
+        lay.addLayout(row)
+        lay.addWidget(_buttons(self))
+
+    def _add_row(self, layer: dict, count: int = 0) -> None:
+        r = self.table.rowCount()
+        self.table.insertRow(r)
+        self.table.setItem(r, 0, QTableWidgetItem(layer["name"]))
+        for c, key in ((1, "visible"), (2, "printable"), (3, "locked")):
+            it = QTableWidgetItem()
+            it.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            it.setCheckState(Qt.CheckState.Checked if layer[key] else Qt.CheckState.Unchecked)
+            self.table.setItem(r, c, it)
+        n = QTableWidgetItem(str(count))
+        n.setFlags(Qt.ItemFlag.ItemIsEnabled)
+        self.table.setItem(r, 4, n)
+
+    def _new(self) -> None:
+        from PyQt6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "Nouveau calque", "Nom du calque :")
+        name = security.clean_line(name, 64)
+        if ok and name:
+            self._add_row({"name": name, "visible": True, "printable": True, "locked": False})
+
+    def layers(self) -> list[dict]:
+        out, seen = [], set()
+        for r in range(self.table.rowCount()):
+            name = security.clean_line(self.table.item(r, 0).text(), 64)
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            out.append({"name": name,
+                        "visible": self.table.item(r, 1).checkState() == Qt.CheckState.Checked,
+                        "printable": self.table.item(r, 2).checkState() == Qt.CheckState.Checked,
+                        "locked": self.table.item(r, 3).checkState() == Qt.CheckState.Checked})
+        return out
+
+
+class PageSetupDialog(QDialog):
+    """Mise en page : format, orientation, dimensions, arrière-plan."""
+
+    def __init__(self, parent, scene):
+        super().__init__(parent)
+        from .units import PAGE_SIZES, PX_PER_MM
+        self._px = PX_PER_MM
+        self._sizes = PAGE_SIZES
+        self.setWindowTitle("Mise en page")
+        form = QFormLayout(self)
+        self.name = QLineEdit(scene.page_name)
+        form.addRow("Nom de la page :", self.name)
+        self.fmt = QComboBox()
+        for n, (w, h) in PAGE_SIZES.items():
+            self.fmt.addItem(f"{n} ({w:g} × {h:g} mm)", n)
+        self.fmt.addItem("Personnalisé", "")
+        form.addRow("Format :", self.fmt)
+        self.orient = QComboBox()
+        self.orient.addItems(["Portrait", "Paysage"])
+        self.orient.setCurrentIndex(1 if scene.page_w > scene.page_h else 0)
+        form.addRow("Orientation :", self.orient)
+        from PyQt6.QtWidgets import QDoubleSpinBox
+        self.w = QDoubleSpinBox()
+        self.h = QDoubleSpinBox()
+        for s, v in ((self.w, scene.page_w), (self.h, scene.page_h)):
+            s.setRange(20, 10000)
+            s.setSuffix(" mm")
+            s.setDecimals(1)
+            s.setValue(v / PX_PER_MM)
+        form.addRow("Largeur :", self.w)
+        form.addRow("Hauteur :", self.h)
+        self.auto = QCheckBox("Agrandir automatiquement la page")
+        self.auto.setChecked(scene.auto_size)
+        form.addRow("", self.auto)
+        self.bg = scene.page_bg
+        self.fmt.setCurrentIndex(self.fmt.count() - 1)
+        for i in range(self.fmt.count() - 1):
+            w, h = PAGE_SIZES[self.fmt.itemData(i)]
+            if {round(w), round(h)} == {round(self.w.value()), round(self.h.value())}:
+                self.fmt.setCurrentIndex(i)
+        self.fmt.activated.connect(self._fmt)
+        self.orient.activated.connect(self._orient)
+        form.addRow(_buttons(self))
+
+    def _fmt(self, i: int) -> None:
+        n = self.fmt.itemData(i)
+        if n:
+            w, h = self._sizes[n]
+            if self.orient.currentIndex() == 1:
+                w, h = h, w
+            self.w.setValue(w)
+            self.h.setValue(h)
+
+    def _orient(self, i: int) -> None:
+        w, h = self.w.value(), self.h.value()
+        if (w > h) != (i == 1):
+            self.w.setValue(h)
+            self.h.setValue(w)
+
+    def props(self, base: dict) -> dict:
+        return dict(base, name=security.clean_line(self.name.text(), 100) or base["name"],
+                    width=self.w.value() * self._px, height=self.h.value() * self._px,
+                    auto_size=self.auto.isChecked())
+
+
+class DataImportDialog(QDialog):
+    """« Créer à partir de données » : organigramme ou diagramme de flux depuis un CSV."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowTitle("Créer un diagramme à partir de données")
+        self.setMinimumWidth(520)
+        lay = QVBoxLayout(self)
+        intro = QLabel(
+            "Choisissez le type de diagramme puis un fichier CSV (séparateur virgule, point-virgule "
+            "ou tabulation, première ligne = en-têtes).\n\n"
+            "• Organigramme : colonnes ID, Nom, Fonction (facultatif), Responsable (ID du supérieur).\n"
+            "• Diagramme de flux : colonnes ID, Description, Type (Processus, Décision, Début, Fin, "
+            "Données, Document), Suivant (ID des étapes suivantes, séparés par « ; »), "
+            "Libellé (facultatif, texte du connecteur), Fonction (facultatif : crée un diagramme "
+            "interfonctionnel avec un couloir par fonction).")
+        intro.setWordWrap(True)
+        lay.addWidget(intro)
+        form = QFormLayout()
+        self.kind = QComboBox()
+        self.kind.addItem("Organigramme hiérarchique", "org")
+        self.kind.addItem("Diagramme de flux", "flow")
+        form.addRow("Type de diagramme :", self.kind)
+        self.new_page = QCheckBox("Créer une nouvelle page")
+        self.new_page.setChecked(True)
+        form.addRow("", self.new_page)
+        lay.addLayout(form)
+        lay.addWidget(_buttons(self, "Choisir le fichier…"))

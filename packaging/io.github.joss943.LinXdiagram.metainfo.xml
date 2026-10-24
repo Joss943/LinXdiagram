@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.joss943.LinXdiagram</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>LinXdiagram</name>
+  <summary>Éditeur de diagrammes compatible Visio</summary>
+  <summary xml:lang="en">Visio-compatible diagram editor</summary>
+  <description>
+    <p>
+      LinXdiagram est un éditeur de diagrammes natif pour Linux, pensé pour les habitués
+      de Microsoft Visio : ruban, gabarits de formes, connecteurs dynamiques, connexion
+      automatique, repères d'alignement et import/export au format .vsdx.
+    </p>
+    <p>
+      Sécurisé par conception : aucune macro, aucune connexion réseau, fichiers strictement
+      validés et chiffrement AES-256 des documents par mot de passe.
+    </p>
+    <p>
+      Projet indépendant, non affilié à Microsoft. Microsoft et Visio sont des marques du groupe
+      Microsoft.
+    </p>
+  </description>
+  <developer id="io.github.joss943">
+    <name>Joss943</name>
+  </developer>
+  <url type="homepage">https://joss943.github.io/LinXdiagram/</url>
+  <url type="bugtracker">https://github.com/Joss943/LinXdiagram/issues</url>
+  <url type="vcs-browser">https://github.com/Joss943/LinXdiagram</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Éditeur avec un diagramme de flux</caption>
+      <image>https://raw.githubusercontent.com/Joss943/LinXdiagram/main/docs/captures/editeur.png</image>
+    </screenshot>
+  </screenshots>
+  <launchable type="desktop-id">io.github.joss943.LinXdiagram.desktop</launchable>
+  <provides>
+    <binary>linxdiagram</binary>
+    <mediatype>application/x-linxdiagram</mediatype>
+    <mediatype>application/vnd.ms-visio.drawing.main+xml</mediatype>
+  </provides>
+  <categories>
+    <category>Office</category>
+    <category>Graphics</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="1.0.0" date="2026-10-23"/>
+  </releases>
+</component>

@@ -1,0 +1,21 @@
+[Desktop Entry]
+Type=Application
+Name=LinXdiagram
+GenericName=Éditeur de diagrammes
+GenericName[en]=Diagram Editor
+Comment=Diagrammes de flux, organigrammes, réseaux et UML — compatible Visio (.vsdx)
+Comment[en]=Flowcharts, org charts, network and UML diagrams — Visio (.vsdx) compatible
+Exec=linxdiagram %F
+TryExec=linxdiagram
+Icon=io.github.joss943.LinXdiagram
+Terminal=false
+StartupNotify=true
+Categories=Office;FlowChart;Qt;
+MimeType=application/x-linxdiagram;application/vnd.ms-visio.drawing.main+xml;
+Keywords=diagramme;organigramme;visio;vsdx;flux;flowchart;uml;réseau;schéma;
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=Nouveau dessin
+Name[en]=New Drawing
+Exec=linxdiagram

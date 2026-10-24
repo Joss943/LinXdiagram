@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LinXdiagram — éditeur de diagrammes libre pour Linux, compatible .vsdx</title>
+<meta name="description" content="Éditeur de diagrammes libre et natif pour Linux, à l'ergonomie familière pour les utilisateurs de Visio, compatible avec les fichiers .vsdx.">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self'; style-src 'self'; script-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'">
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<a class="skip" href="#contenu">Aller au contenu</a>
+<header class="top"><div class="wrap">
+  <a class="brand" href="index.html"><img src="logo.svg" alt="" width="32" height="32">LinXdiagram</a>
+  <nav class="main" aria-label="Navigation principale"><a href="index.html" aria-current="page">Accueil</a><a href="index.html#fonctions">Fonctions</a><a href="index.html#installer">Installer</a><a href="https://github.com/Joss943/LinXdiagram">Code source</a></nav>
+</div></header>
+<main id="contenu">
+<div class="hero"><div class="wrap">
+  <h1>Des diagrammes professionnels,<br>nativement sous Linux.</h1>
+  <p class="lead">LinXdiagram est un éditeur de diagrammes libre, à l'ergonomie familière pour les habitués
+  de Microsoft Visio, qui ouvre et enregistre les fichiers <code>.vsdx</code>. Sans abonnement, sans compte,
+  sans connexion réseau.</p>
+  <div class="actions">
+    <a class="btn primary" href="#installer">Installer</a>
+    <a class="btn secondary" href="https://github.com/Joss943/LinXdiagram">Voir le code sur GitHub</a>
+  </div>
+  <figure class="shot">
+    <img src="captures/editeur.png" width="1366" height="740"
+      alt="Fenêtre de LinXdiagram : ruban en haut, volet Formes à gauche, diagramme de flux « Traitement d'une commande » au centre, volet Format de la forme à droite.">
+    <figcaption>L'éditeur avec un diagramme de flux, sur un écran de portable 1366×768.</figcaption>
+  </figure>
+</div></div>
+
+<section id="fonctions"><div class="wrap">
+  <h2>Fonctions</h2>
+  <div class="grid"><div class="card"><h3>Ruban et volets familiers</h3><p>Onglets Accueil, Insertion, Création, Données, Processus, Révision, Affichage ; volets Formes, Format de la forme, Données de forme ; recherche de commandes Alt+Q.</p></div><div class="card"><h3>Connecteurs dynamiques</h3><p>Routage à angle droit qui évite les formes, collage dynamique ou statique, sauts de ligne, AutoConnect avec formes rapides.</p></div><div class="card"><h3>Gabarits de formes</h3><p>Formes de base, diagrammes de flux, flèches, organigrammes, réseau, UML et diagrammes interfonctionnels (couloirs).</p></div><div class="card"><h3>Couloirs (interfonctionnel)</h3><p>Couloirs horizontaux ou verticaux, phases, orientation modifiable, styles ; glisser un couloir emmène ses formes.</p></div><div class="card"><h3>Création à partir de données</h3><p>Un fichier CSV devient un organigramme ou un diagramme de flux, avec couloirs par fonction.</p></div><div class="card"><h3>Mise en forme</h3><p>Thèmes et variantes, 35 styles rapides, remplissage, trait, ombre, dégradé, calques, verrouillage, commentaires.</p></div><div class="card"><h3>Compatible .vsdx</h3><p>Ouverture et enregistrement au format Visio : formes maîtres, géométrie, textes, données, connecteurs, calques, conteneurs.</p></div><div class="card"><h3>Exports</h3><p>PDF vectoriel multipage, PNG, JPEG, SVG, impression avec aperçu, mode présentation plein écran.</p></div></div>
+</div></section>
+
+<section class="alt"><div class="wrap two">
+  <div>
+    <h2>Diagrammes interfonctionnels</h2>
+    <p>Représentez qui fait quoi dans un processus : un couloir par service, des phases, une barre de titre.
+    Les couloirs restent accolés, se réordonnent par glisser-déposer et emportent leurs formes. L'orientation
+    passe d'horizontale à verticale en un clic.</p>
+  </div>
+  <img src="captures/couloirs-vertical.png" width="1160" height="780"
+    alt="Diagramme interfonctionnel vertical avec trois colonnes Client, Ventes et Logistique, et l'onglet Diagramme de flux interfonctionnel du ruban.">
+</div></section>
+
+<section id="securite"><div class="wrap two">
+  <div>
+    <h2>Sécurité et vie privée</h2>
+    <ul class="check">
+      <li>Aucune macro, aucun script ni formule exécutés à l'ouverture d'un document.</li>
+      <li>Aucune connexion réseau, aucune télémétrie, aucun compte.</li>
+      <li>Chiffrement des documents par mot de passe (AES-256-GCM, scrypt).</li>
+      <li>Import <code>.vsdx</code> protégé contre les bombes de décompression et les attaques XML.</li>
+      <li>Vos données restent sur votre ordinateur : <a href="confidentialite.html">politique de confidentialité</a>.</li>
+    </ul>
+  </div>
+  <img src="captures/editeur-sombre.png" width="1366" height="740"
+    alt="LinXdiagram avec le thème sombre.">
+</div></section>
+
+<section id="installer" class="alt"><div class="wrap">
+  <h2>Installer</h2>
+  <p>Prérequis : Python 3.11 ou plus récent et PyQt6.</p>
+  <pre><code># Fedora
+sudo dnf install python3-pyqt6
+# Debian / Ubuntu
+sudo apt install python3-pyqt6 python3-pyqt6.qtsvg
+
+git clone https://github.com/Joss943/LinXdiagram.git
+cd LinXdiagram
+./install.sh        # ajoute LinXdiagram au menu des applications</code></pre>
+  <p>Pour désinstaller : <code>./install.sh --uninstall</code> (vos documents sont conservés).
+  La police libre Carlito, si elle est installée, offre les mêmes métriques que Calibri.</p>
+</div></section>
+
+<section><div class="wrap">
+  <h2>Licence et contributions</h2>
+  <p>LinXdiagram est un logiciel libre publié sous <a href="https://github.com/Joss943/LinXdiagram/blob/main/LICENSE">licence MIT</a>.
+  Le format <code>.vsdx</code> est pris en charge à partir de la spécification publique [MS-VSDX] ; aucun code,
+  aucune image ni aucun fichier de Microsoft n'est utilisé (<a href="https://github.com/Joss943/LinXdiagram/blob/main/THIRD_PARTY_NOTICES.md">composants
+  tiers et marques</a>).</p>
+  <p>Bugs et idées : <a href="https://github.com/Joss943/LinXdiagram/issues">tickets GitHub</a>. Failles de sécurité :
+  <a href="https://github.com/Joss943/LinXdiagram/security/advisories/new">signalement privé</a>.</p>
+</div></section>
+</main>
+<footer><div class="wrap">
+  <nav aria-label="Informations légales">
+    <a href="mentions-legales.html">Mentions légales</a>
+    <a href="confidentialite.html">Confidentialité</a>
+    <a href="accessibilite.html">Accessibilité : partiellement conforme</a>
+    <a href="https://github.com/Joss943/LinXdiagram">GitHub</a>
+  </nav>
+  <p>© 2026 Joss943 et les contributeurs — logiciel libre sous licence MIT. Ce site n'utilise aucun cookie ni traceur.</p>
+  <p>LinXdiagram est un projet indépendant, non affilié à Microsoft, ni approuvé ou soutenu par Microsoft.
+  Microsoft, Visio et Office sont des marques du groupe Microsoft, citées uniquement pour indiquer la compatibilité.</p>
+</div></footer>
+</body>
+</html>
