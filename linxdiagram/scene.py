@@ -7,10 +7,10 @@ import copy
 import secrets
 
 from PyQt6.QtCore import QLineF, QPointF, QRectF, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QPen, QPolygonF
+from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF
 from PyQt6.QtWidgets import QApplication, QGraphicsScene
 
-from . import fileformat, layout, quickstyles, stencils, swimlanes
+from . import fileformat, layout, quickstyles, shapeops, stencils, swimlanes
 from .commands import AddItemsCommand, RemoveItemsCommand, StateCommand, _shapes_first
 from .items import ACCENT, GLUE, ConnectorItem, ShapeItem, TextLabel, make_item
 from .units import GRID_PX, connector_style, connector_text_style, mm_to_px
@@ -33,6 +33,27 @@ AC_DIRS = ((0, -1), (1, 0), (0, 1), (-1, 0))
 
 def new_id() -> str:
     return secrets.token_hex(6)
+
+
+def _simplify(pts: list, eps: float) -> list:
+    """Ramer-Douglas-Peucker : moins de points pour un tracé à main levée."""
+    if len(pts) < 3:
+        return list(pts)
+    a, b = pts[0], pts[-1]
+    dx, dy = b.x() - a.x(), b.y() - a.y()
+    norm = (dx * dx + dy * dy) ** 0.5
+    best, idx = 0.0, 0
+    for i in range(1, len(pts) - 1):
+        p = pts[i]
+        if norm < 1e-9:
+            d = ((p.x() - a.x()) ** 2 + (p.y() - a.y()) ** 2) ** 0.5
+        else:
+            d = abs(dy * p.x() - dx * p.y() + b.x() * a.y() - b.y() * a.x()) / norm
+        if d > best:
+            best, idx = d, i
+    if best <= eps:
+        return [a, b]
+    return _simplify(pts[:idx + 1], eps)[:-1] + _simplify(pts[idx:], eps)
 
 
 class DiagramScene(QGraphicsScene):
@@ -73,6 +94,7 @@ class DiagramScene(QGraphicsScene):
         self._jump_pending = False
         self._carry: dict[str, QPointF] = {}
         self._carry_anchor: tuple[str, QPointF] | None = None
+        self._sel_order: list = []  # ordre de sélection : la première forme est la « principale »
         self.selectionChanged.connect(self._on_selection_changed)
         for st in page.get("shapes", []):
             self.add_item_from_state(st)
@@ -292,7 +314,11 @@ class DiagramScene(QGraphicsScene):
             return
         s = self.view_scale
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        if self._draw is not None and not self._draw["rect"].isNull():
+        if self._draw is not None and self._draw.get("points"):
+            painter.setPen(QPen(ACCENT, 1.5 / s))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(self._draw_path(self._draw))
+        elif self._draw is not None and not self._draw["rect"].isNull():
             painter.setPen(QPen(ACCENT, 1 / s, Qt.PenStyle.DashLine))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             if self._draw["tool"] == "ellipse":
@@ -539,6 +565,11 @@ class DiagramScene(QGraphicsScene):
             self._draw = {"tool": tool, "start": start, "rect": QRectF()}
             event.accept()
             return
+        if tool in ("pencil", "freeform", "arc"):
+            start = self.snap_point(pos) if tool == "arc" else pos
+            self._draw = {"tool": tool, "start": start, "rect": QRectF(), "points": [start]}
+            event.accept()
+            return
         if tool == "text":
             item = self.top_item_at(pos)
             if item is not None:
@@ -590,6 +621,15 @@ class DiagramScene(QGraphicsScene):
         self._mouse = pos
         if self._conn_drag is not None:
             self._update_conn_drag(pos)
+            event.accept()
+            return
+        if self._draw is not None and "points" in self._draw:
+            pts = self._draw["points"]
+            if self._draw["tool"] == "arc":
+                self._draw["points"] = [pts[0], self.snap_point(pos)]
+            elif (pos - pts[-1]).manhattanLength() * self.view_scale > 2:
+                pts.append(pos)
+            self.update()
             event.accept()
             return
         if self._draw is not None:
@@ -875,9 +915,68 @@ class DiagramScene(QGraphicsScene):
                 self.push_state({conn.id: d["before"]}, {conn.id: after}, "Recoller le connecteur")
         self.update()
 
+    @staticmethod
+    def _draw_path(d: dict) -> QPainterPath:
+        """Tracé du Crayon, de la Forme libre ou de l'Arc dans le repère de la page."""
+        pts = d["points"]
+        p = QPainterPath(pts[0])
+        if d["tool"] == "arc":
+            if len(pts) > 1:
+                a, b = pts[0], pts[-1]
+                # Quart d'ellipse, comme l'outil Arc de Visio : part verticalement, arrive horizontalement.
+                k = 0.5523
+                p.cubicTo(QPointF(a.x(), a.y() + (b.y() - a.y()) * k),
+                          QPointF(b.x() - (b.x() - a.x()) * k, b.y()), b)
+            return p
+        pts = _simplify(pts, 1.2)
+        if len(pts) > 2:
+            # Lissage : courbes passant par le milieu des segments.
+            for i in range(1, len(pts) - 1):
+                mid = (pts[i] + pts[i + 1]) / 2
+                p.quadTo(pts[i], mid)
+            p.lineTo(pts[-1])
+        else:
+            for pt in pts[1:]:
+                p.lineTo(pt)
+        if d["tool"] == "freeform":
+            p.closeSubpath()
+        return p
+
+    def _finish_freehand(self, d: dict) -> None:
+        path = self._draw_path(d)
+        r = path.boundingRect()
+        if max(r.width(), r.height()) * self.view_scale < 6:
+            return
+        r = r.adjusted(-0.5, -0.5, 0.5, 0.5)
+        _r, cmds = shapeops.to_commands(path)
+        # to_commands normalise sur le rectangle exact : on recalcule sur le rectangle élargi.
+        box = path.boundingRect()
+        sx = box.width() / r.width() if r.width() else 1.0
+        sy = box.height() / r.height() if r.height() else 1.0
+        ox, oy = (box.left() - r.left()) / r.width(), (box.top() - r.top()) / r.height()
+        fixed = []
+        for cmd in cmds:
+            vals = cmd[1:]
+            fixed.append([cmd[0]] + [round(ox + v * sx, 6) if k % 2 == 0 else round(oy + v * sy, 6)
+                                     for k, v in enumerate(vals)])
+        if d["tool"] != "freeform":
+            fixed = [c for c in fixed if c[0] != "Z"]
+        st = self.new_shape_state("special.custom", r.center(), r.width(), r.height(), snap=False)
+        st["path"] = fixed
+        st["text"] = ""
+        if d["tool"] != "freeform":
+            st["style"].update(fill="", themed=False)
+            st["style"]["line"] = st["style"]["line"] or "#000000"
+        names = {"pencil": "Crayon", "freeform": "Forme libre", "arc": "Arc"}
+        self.add_states([st], names[d["tool"]])
+
     def _finish_draw(self) -> None:
         d = self._draw
         self._draw = None
+        if "points" in d:
+            self.update()
+            self._finish_freehand(d)
+            return
         r = d["rect"]
         self.update()
         if r.width() * self.view_scale < 4 or r.height() * self.view_scale < 4:
@@ -890,6 +989,7 @@ class DiagramScene(QGraphicsScene):
     # ------------------------------------------------------------------ sélection
     def _on_selection_changed(self) -> None:
         sel = self.selectedItems()
+        self._sel_order = [i for i in self._sel_order if i in sel] + [i for i in sel if i not in self._sel_order]
         prev = self.single_selected
         self.single_selected = sel[0] if len(sel) == 1 else None
         for it in sel:
@@ -1145,6 +1245,96 @@ class DiagramScene(QGraphicsScene):
             st["x"] += dx
             st["y"] += dy
         self.modify(shapes, al, "Aligner")
+
+    # ------------------------------------------------------------------ opérations sur les formes
+    def shape_operation(self, op: str) -> bool:
+        """Union, Combiner, Fragmenter, Intersecter, Soustraire (Développeur > Opérations)."""
+        shapes = [s for s in self.selected_shapes() if not s.locked and not s.sdef.cff]
+        if len(shapes) < 2:
+            return False
+        order = [s for s in self._sel_order if s in shapes] + [s for s in shapes if s not in self._sel_order]
+        paths = [s.sceneTransform().map(s._outline) for s in order]
+        results = shapeops.apply(op, paths)
+        ref = order[0].state()
+        states = []
+        for path in results:
+            r, cmds = shapeops.to_commands(path)
+            if len(cmds) < 2 or len(cmds) > fileformat.MAX_PATH_COMMANDS or r.width() < 1 or r.height() < 1:
+                continue
+            st = self.new_shape_state("special.custom", r.center(), r.width(), r.height(), snap=False)
+            st.update(path=cmds, style=dict(ref["style"]), text_style=dict(ref["text_style"]),
+                      z=ref["z"] + len(states) * 0.001, layer=ref.get("layer", ""),
+                      text=ref["text"] if op != "fragment" else "")
+            states.append(st)
+        if not states:
+            return False
+        label = shapeops.OPERATIONS[op]
+        self.doc.undo_stack.beginMacro(label)
+        try:
+            self.delete_items(order, label)
+            self.add_states(states, label)
+        finally:
+            self.doc.undo_stack.endMacro()
+        self.select_items([self._items[st["id"]] for st in states if st["id"] in self._items])
+        return True
+
+    def auto_align_space(self, align: bool = True, space: bool = True) -> None:
+        """« Aligner automatiquement et espacer » : les formes reliées presque alignées le
+        deviennent, et les écarts le long des colonnes et des lignes sont égalisés."""
+        shapes = [s for s in (self.selected_shapes() or self.shapes())
+                  if not s.sdef.cff and not s.sdef.container and not s.locked]
+        ids = {s.id: s for s in shapes}
+        if len(ids) < 2:
+            return
+        c = {i: s.scene_box().center() for i, s in ids.items()}
+        size = {i: s.scene_box() for i, s in ids.items()}
+        tol = mm_to_px(20)
+        parent = {"col": {i: i for i in ids}, "row": {i: i for i in ids}}
+
+        def find(kind, i):
+            while parent[kind][i] != i:
+                parent[kind][i] = parent[kind][parent[kind][i]]
+                i = parent[kind][i]
+            return i
+        for conn in self.connectors():
+            a, b = conn.src.get("shape"), conn.dst.get("shape")
+            if a not in ids or b not in ids or a == b:
+                continue
+            dx, dy = abs(c[a].x() - c[b].x()), abs(c[a].y() - c[b].y())
+            kind = "col" if dx <= dy else "row"
+            if min(dx, dy) < tol:
+                parent[kind][find(kind, a)] = find(kind, b)
+        x = {i: c[i].x() for i in ids}
+        y = {i: c[i].y() for i in ids}
+        for kind in ("col", "row"):
+            groups: dict[str, list[str]] = {}
+            for i in ids:
+                groups.setdefault(find(kind, i), []).append(i)
+            for members in groups.values():
+                if len(members) < 2:
+                    continue
+                if align:
+                    vals = sorted((x if kind == "col" else y)[i] for i in members)
+                    med = vals[len(vals) // 2]
+                    for i in members:
+                        (x if kind == "col" else y)[i] = med
+                if space:
+                    axis = y if kind == "col" else x
+                    members.sort(key=lambda i: axis[i])
+                    ext = (lambda i: size[i].height()) if kind == "col" else (lambda i: size[i].width())
+                    gaps = [axis[b] - ext(b) / 2 - (axis[a] + ext(a) / 2) for a, b in zip(members, members[1:])]
+                    gap = max(mm_to_px(8), sum(gaps) / len(gaps))
+                    pos = axis[members[0]] + ext(members[0]) / 2
+                    for i in members[1:]:
+                        axis[i] = pos + gap + ext(i) / 2
+                        pos = axis[i] + ext(i) / 2
+        labels = {(True, True): "Aligner automatiquement et espacer", (True, False): "Aligner automatiquement",
+                  (False, True): "Espacement automatique"}
+
+        def fn(it, st):
+            st["x"] += x[it.id] - c[it.id].x()
+            st["y"] += y[it.id] - c[it.id].y()
+        self.modify(list(ids.values()), fn, labels[(align, space)])
 
     def distribute(self, axis: str) -> None:
         shapes = self.selected_shapes()

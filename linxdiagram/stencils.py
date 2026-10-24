@@ -393,6 +393,74 @@ def _arrow_pts(direction: str):
     return [(y, 1 - x) for x, y in right]
 
 
+# BPMN, blocs, chronologie, entité-relation
+
+def _b_bpmn_subprocess():
+    return _rrect(0, 0, 1, 1, 0.12), _union(_rect(0.44, 0.74, 0.12, 0.2)).united(
+        _lines([(0.5, 0.77), (0.5, 0.91)], [(0.465, 0.84), (0.535, 0.84)]))
+
+
+def _b_double_circle():
+    return _ellipse(0.5, 0.5, 0.5, 0.5), _ellipse(0.5, 0.5, 0.41, 0.41)
+
+
+def _diamond():
+    return _poly_path([(0.5, 0), (1, 0.5), (0.5, 1), (0, 0.5)])
+
+
+def _b_gateway_x():
+    return _diamond(), _lines([(0.36, 0.36), (0.64, 0.64)], [(0.64, 0.36), (0.36, 0.64)])
+
+
+def _b_gateway_plus():
+    return _diamond(), _lines([(0.5, 0.28), (0.5, 0.72)], [(0.28, 0.5), (0.72, 0.5)])
+
+
+def _b_gateway_o():
+    return _diamond(), _ellipse(0.5, 0.5, 0.2, 0.2)
+
+
+def _b_envelope():
+    return _rect(0, 0, 1, 1), _lines([(0, 0), (0.5, 0.55), (1, 0)])
+
+
+def _b_brace():
+    p = QPainterPath()
+    p.moveTo(1, 0)
+    p.cubicTo(0.5, 0, 0.5, 0.05, 0.5, 0.2)
+    p.lineTo(0.5, 0.4)
+    p.cubicTo(0.5, 0.48, 0.3, 0.5, 0, 0.5)
+    p.cubicTo(0.3, 0.5, 0.5, 0.52, 0.5, 0.6)
+    p.lineTo(0.5, 0.8)
+    p.cubicTo(0.5, 0.95, 0.5, 1, 1, 1)
+    return _rect(0, 0, 1, 1), p
+
+
+def _b_timeline():
+    ticks = [[(x / 10, 0.0), (x / 10, 1.0)] for x in range(1, 10)]
+    return _rect(0, 0.3, 1, 0.4), _lines(*ticks)
+
+
+def _b_interval():
+    return _rect(0, 0, 1, 1), _lines([(0, 0), (0, 1)], [(1, 0), (1, 1)])
+
+
+def _b_pointer():
+    return _poly_path([(0, 0), (1, 0), (1, 0.6), (0.5, 1), (0, 0.6)]), None
+
+
+def _b_entity():
+    return _rect(0, 0, 1, 1), _lines([(0, 0.28), (1, 0.28)])
+
+
+def _b_weak_entity():
+    return _rect(0, 0, 1, 1), _rect(0.04, 0.08, 0.92, 0.84)
+
+
+def _b_view():
+    return _rrect(0, 0, 1, 1, 0.08), _lines([(0, 0.28), (1, 0.28)])
+
+
 # ------------------------------------------------------------------ catalogue
 
 BASIC = "Formes de base"
@@ -402,8 +470,12 @@ ORG = "Organigramme hiérarchique"
 NET = "Réseau"
 UML = "UML / Logiciel"
 CFF = "Diagramme de flux interfonctionnel"
+BPMN = "BPMN de base"
+BLOCK = "Diagramme de blocs"
+TIMELINE = "Chronologie"
+DB = "Base de données (entité-relation)"
 
-CATEGORIES = (BASIC, FLOW, CFF, ARROWS_CAT, ORG, NET, UML)
+CATEGORIES = (BASIC, FLOW, CFF, ARROWS_CAT, BLOCK, BPMN, ORG, NET, UML, DB, TIMELINE)
 
 _TRI_PORTS = ((0.5, 0.0), (0.75, 0.5), (0.5, 1.0), (0.25, 0.5))
 _LABEL_BELOW = (-0.6, 1.04, 2.2, 0.55)
@@ -586,6 +658,86 @@ _DEFS: list[ShapeDef] = [
              keywords="fin"),
     ShapeDef("uml.interface", "Interface", UML, _unit(_b_lollipop), (8, 8), text_rect=(-2, 1.1, 5, 1.5),
              label_outside=True, keywords="lollipop api"),
+]
+
+_EVENT_PORTS = SIDES
+_WHITE = {"fill": "#ffffff", "themed": False}
+_DEFS += [
+    # BPMN de base (notation BPMN 2.0)
+    ShapeDef("bpmn.task", "Tâche", BPMN, _b_round, (32, 20), keywords="activité action bpmn",
+             default_text="Tâche"),
+    ShapeDef("bpmn.subprocess", "Sous-processus réduit", BPMN, _unit(_b_bpmn_subprocess), (32, 20),
+             keywords="sous processus bpmn", text_rect=(0, 0, 1, 0.75), default_text="Sous-processus"),
+    ShapeDef("bpmn.start", "Événement de début", BPMN, _b_ellipse, (10, 10), text_rect=_LABEL_BELOW,
+             label_outside=True, style={**_WHITE, "line": "#2e7d32", "line_width": 1.5},
+             keywords="début départ start bpmn"),
+    ShapeDef("bpmn.intermediate", "Événement intermédiaire", BPMN, _unit(_b_double_circle), (10, 10),
+             text_rect=_LABEL_BELOW, label_outside=True, style={**_WHITE, "line": "#b8860b", "line_width": 1.2},
+             keywords="intermédiaire attente minuterie bpmn"),
+    ShapeDef("bpmn.end", "Événement de fin", BPMN, _b_ellipse, (10, 10), text_rect=_LABEL_BELOW,
+             label_outside=True, style={**_WHITE, "line": "#c00000", "line_width": 3.5},
+             keywords="fin end bpmn"),
+    ShapeDef("bpmn.gateway", "Passerelle exclusive", BPMN, _unit(_b_gateway_x), (14, 14),
+             text_rect=_LABEL_BELOW, label_outside=True, style={**_WHITE, "line": "#b8860b"},
+             keywords="passerelle décision xor ou exclusif bpmn"),
+    ShapeDef("bpmn.parallel", "Passerelle parallèle", BPMN, _unit(_b_gateway_plus), (14, 14),
+             text_rect=_LABEL_BELOW, label_outside=True, style={**_WHITE, "line": "#b8860b"},
+             keywords="passerelle parallèle et and bpmn"),
+    ShapeDef("bpmn.inclusive", "Passerelle inclusive", BPMN, _unit(_b_gateway_o), (14, 14),
+             text_rect=_LABEL_BELOW, label_outside=True, style={**_WHITE, "line": "#b8860b"},
+             keywords="passerelle inclusive or ou bpmn"),
+    ShapeDef("bpmn.data_object", "Objet de données", BPMN, _unit(_b_note), (12, 16), text_rect=_LABEL_BELOW,
+             label_outside=True, style={**_WHITE, "line": "#595959"}, keywords="donnée document bpmn"),
+    ShapeDef("bpmn.data_store", "Magasin de données", BPMN, _b_database, (16, 14), text_rect=_LABEL_BELOW,
+             label_outside=True, style={**_WHITE, "line": "#595959"}, keywords="base stockage bpmn"),
+    ShapeDef("bpmn.message", "Message", BPMN, _unit(_b_envelope), (14, 10), text_rect=_LABEL_BELOW,
+             label_outside=True, style={**_WHITE, "line": "#595959"}, keywords="enveloppe courrier bpmn"),
+    ShapeDef("bpmn.group", "Groupe", BPMN, _b_round, (60, 40), SIDES_AND_CORNERS,
+             style={"fill": "", "line": "#595959", "dash": "dashdot", "themed": False},
+             text={"color": "#404040"}, text_rect=(0, 0, 1, 0.2), container=True, keywords="groupe regroupement bpmn"),
+    ShapeDef("bpmn.annotation", "Annotation de texte", BPMN, _unit(_b_annotation), (30, 14),
+             style={"fill": "", "line": "#595959", "themed": False}, outline_visible=False,
+             text={"color": "#404040", "halign": "left"}, keywords="commentaire note bpmn"),
+
+    # Diagramme de blocs
+    ShapeDef("block.box", "Bloc", BLOCK, _b_rect, (30, 20), SIDES_AND_CORNERS, keywords="boîte bloc"),
+    ShapeDef("block.rounded", "Bloc arrondi", BLOCK, _b_round, (30, 20), SIDES_AND_CORNERS),
+    ShapeDef("block.3d", "Bloc 3D", BLOCK, _unit(_b_cube), (30, 22), text_rect=(0, 0.2, 0.8, 0.8),
+             keywords="relief cube"),
+    ShapeDef("block.circle", "Cercle", BLOCK, _b_ellipse, (22, 22)),
+    ShapeDef("block.cylinder", "Cylindre", BLOCK, _b_cylinder, (20, 28), keywords="tube stockage"),
+    ShapeDef("block.arrow", "Flèche simple", BLOCK, _poly(_arrow_pts("right")), (30, 14),
+             keywords="flèche direction"),
+    ShapeDef("block.brace", "Accolade", BLOCK, _unit(_b_brace), (8, 40), (), outline_visible=False,
+             style={"fill": "", "themed": False}, text_rect=(-3.2, 0, 3, 1), label_outside=True,
+             keywords="accolade regroupement"),
+
+    # Base de données (entité-relation, notation de Chen et tables)
+    ShapeDef("db.entity", "Entité", DB, _unit(_b_entity), (40, 30), SIDES_AND_CORNERS,
+             text_rect=(0, 0, 1, 0.28), text={"bold": True}, default_text="Entité", keywords="table er"),
+    ShapeDef("db.weak_entity", "Entité faible", DB, _unit(_b_weak_entity), (35, 16), default_text="Entité"),
+    ShapeDef("db.relationship", "Relation", DB, _unit(lambda: (_diamond(), None)), (30, 18),
+             default_text="Relation", keywords="association losange"),
+    ShapeDef("db.attribute", "Attribut", DB, _b_ellipse, (28, 14), style=dict(_WHITE),
+             text={"color": "#262626"}, default_text="Attribut", keywords="champ colonne"),
+    ShapeDef("db.table", "Table", DB, _unit(_b_entity), (45, 40), SIDES_AND_CORNERS,
+             text_rect=(0, 0, 1, 0.28), text={"bold": True}, default_text="Table", keywords="sql colonne"),
+    ShapeDef("db.view", "Vue", DB, _unit(_b_view), (45, 35), SIDES_AND_CORNERS,
+             text_rect=(0, 0, 1, 0.28), text={"bold": True, "italic": True}, default_text="Vue",
+             keywords="requête sql"),
+
+    # Chronologie
+    ShapeDef("time.line", "Chronologie", TIMELINE, _unit(_b_timeline), (200, 8), ((0, 0.5), (1, 0.5)),
+             text_rect=(0, 1.3, 1, 2.5), label_outside=True, keywords="frise ligne temps calendrier"),
+    ShapeDef("time.milestone", "Jalon", TIMELINE, _unit(lambda: (_diamond(), None)), (8, 8),
+             text_rect=(-2.5, -2.4, 6, 2.2), label_outside=True, style={"fill": "#c55a11", "line": "#843c0c",
+                                                                         "themed": False},
+             default_text="Jalon", keywords="étape date échéance"),
+    ShapeDef("time.interval", "Intervalle", TIMELINE, _unit(_b_interval), (50, 8),
+             style={"transparency": 35.0}, default_text="Intervalle", keywords="période durée"),
+    ShapeDef("time.today", "Aujourd'hui", TIMELINE, _unit(_b_pointer), (6, 8), text_rect=(-3, -2.2, 7, 2),
+             label_outside=True, style={"fill": "#c00000", "line": "#c00000", "themed": False},
+             default_text="Aujourd'hui", keywords="maintenant marqueur"),
 ]
 
 _CFF_STYLE = {"fill": "#dce6f2", "line": "#7f9cc9", "themed": False}

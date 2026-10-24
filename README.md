@@ -34,7 +34,9 @@ Carlito (métriquement identique à Calibri) est utilisée si elle est installé
   Développeur, Aide ; grands et petits boutons, boutons partagés, galeries, lanceurs de boîte de
   dialogue ↘, réduction du ruban (Ctrl+F1 ou double-clic sur un onglet).
 * **Volet Formes** : onglets FORMES / RECHERCHER, « Plus de formes », Formes rapides, gabarits ouverts,
-  liste à deux colonnes, glisser-déposer.
+  liste à deux colonnes, glisser-déposer. Gabarits : formes de base, diagramme de flux, couloirs,
+  flèches, **diagramme de blocs**, **BPMN de base**, organigramme, réseau, UML, **base de données
+  (entité-relation)** et **chronologie**, avec les modèles correspondants dans Fichier > Nouveau.
 * **Volets de tâches** : Format de la forme (Remplissage et trait, Effets, Texte, Taille et
   propriétés), Taille et position, Données de forme, Commentaires, Problèmes, Panoramique et zoom.
 * **Onglets de pages** avec navigation ◀ ▶, menu « Tout » et ⊕ ; **barre d'état** avec page, taille et
@@ -48,7 +50,7 @@ Carlito (métriquement identique à Calibri) est utilisée si elle est installé
 
 | Onglet | Fonctions |
 |---|---|
-| Accueil | Coller, couper, copier, reproduire la mise en forme ; police, taille, A⁺/A⁻, effacer la mise en forme, gras, italique, souligné, barré, casse ; alignements ; Pointeur, Connecteur, Texte, outils de dessin ; **Styles rapides** (35 styles), Remplissage, Trait (couleur, épaisseur, tirets, flèches), Effets (ombre, lumière, dégradé) ; Aligner, Position, Premier plan, Arrière-plan, Grouper ; **Modifier la forme**, Calques, Sélectionner par type, Rechercher / Remplacer |
+| Accueil | Coller, couper, copier, reproduire la mise en forme ; police, taille, A⁺/A⁻, effacer la mise en forme, gras, italique, souligné, barré, casse ; alignements ; Pointeur, Connecteur, Texte, outils de dessin (rectangle, ellipse, ligne, forme libre, arc, crayon) ; **Styles rapides** (35 styles), Remplissage, Trait (couleur, épaisseur, tirets, flèches), Effets (ombre, lumière, dégradé) ; Aligner, Position (**Aligner automatiquement et espacer**, espacement automatique, distribuer), Premier plan, Arrière-plan, Grouper ; **Modifier la forme**, Calques, Sélectionner par type, Rechercher / Remplacer |
 | Insertion | Page vierge, dupliquer, renommer, supprimer ; Images ; Conteneur, Légende, Connecteur ; Lien (web ou page du document) ; Zone de texte, Info-bulle d'écran, Symbole |
 | Création | Orientation, Taille, **Taille automatique**, Mise en page ; **Thèmes** et **Variantes** ; Arrière-plans, **Bordures et titres** ; **Redisposer la page**, Connecteurs, **sauts de ligne** |
 | Données | **Créer à partir de données** (organigramme ou diagramme de flux depuis un CSV), fenêtre Données de forme, **Rapports de forme** (CSV) |
@@ -56,7 +58,7 @@ Carlito (métriquement identique à Calibri) est utilisée si elle est installé
 | Diagramme de flux interfonctionnel (contextuel) | Couloir (avant / après), Séparateur, nouveau diagramme horizontal ou vertical, Disposer les couloirs, Orientation du diagramme, Faire pivoter les étiquettes, Styles, Barre de titre, Séparateurs |
 | Révision | **Commentaires** (nouveau, précédent, suivant, supprimer, volet), **verrouiller les formes**, protéger le document |
 | Affichage | **Plein écran** (présentation page par page), règle, grille, grille dynamique, AutoConnect, points de connexion, magnétisme, Zoom, Ajuster à la fenêtre, Largeur de page, Nouvelle fenêtre, Volets des tâches |
-| Développeur | ShapeSheet, import / export .vsdx, propriétés du document |
+| Développeur | ShapeSheet ; **Opérations** sur les formes (Union, Combiner, Fragmenter, Intersecter, Soustraire), Forme libre, Arc, Crayon ; import / export .vsdx, propriétés du document |
 
 ### Diagrammes de flux interfonctionnels (couloirs)
 

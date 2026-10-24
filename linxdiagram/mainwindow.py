@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, Q
                              QStackedWidget, QTabBar, QToolButton, QVBoxLayout, QWidget, QWidgetAction)
 
 from . import (APP_NAME, __version__, FILE_EXT, datavis, export, fileformat, icons, quickstyles, security,
-               stencils, swimlanes, templates, vsdx)
+               shapeops, stencils, swimlanes, templates, vsdx)
 from .backstage import Backstage
 from .canvas import CanvasArea
 from .commands import DocSettingsCommand, PageCommand
@@ -183,7 +183,10 @@ class MainWindow(QMainWindow):
                 ("connector", "Connecteur", "connector", "Ctrl+3", "Faites glisser d'une forme à une autre."),
                 ("line", "Ligne", "line", "Ctrl+6", "Tracer un trait."),
                 ("rectangle", "Rectangle", "rect_tool", "Ctrl+8", "Dessiner un rectangle."),
-                ("ellipse", "Ellipse", "ellipse_tool", "Ctrl+9", "Dessiner une ellipse.")):
+                ("ellipse", "Ellipse", "ellipse_tool", "Ctrl+9", "Dessiner une ellipse."),
+                ("freeform", "Forme libre", "freeform", "Ctrl+5", "Dessiner une forme fermée à main levée."),
+                ("pencil", "Crayon", "pencil", "Ctrl+4", "Tracer un trait à main levée."),
+                ("arc", "Arc", "arc", "Ctrl+7", "Tracer un arc entre deux points.")):
             act = A(f"tool_{key}", text, ic, sc, None, checkable=True, tip=tip,
                     label="Pointeur" if key == "select" else None)
             act.triggered.connect(lambda _=False, k=key: self.doc.set_tool(k))
@@ -266,6 +269,16 @@ class MainWindow(QMainWindow):
         A("subprocess", "Créer à partir de la sélection", "subprocess", None, self.create_subprocess,
           tip="Déplace la sélection vers une nouvelle page reliée par un sous-processus.")
         A("check_diagram", "Vérifier le diagramme", "check_diagram", None, self.check_diagram)
+        A("auto_align_space", "Aligner automatiquement et espacer", "position", None,
+          self._sc(lambda s: s.auto_align_space()),
+          tip="Aligne les formes reliées presque alignées et égalise leurs espacements.")
+        A("auto_align", "Aligner automatiquement", "align", None,
+          self._sc(lambda s: s.auto_align_space(space=False)))
+        A("auto_space", "Espacement automatique", "distribute_v", None,
+          self._sc(lambda s: s.auto_align_space(align=False)))
+        for op, label in shapeops.OPERATIONS.items():
+            A(f"op_{op}", label, "union" if op == "union" else "shape_ops", None,
+              lambda _=False, o=op: self._shape_op(o))
         A("cff_lane", "Couloir", "swimlane", None, self._sc(lambda s: s.cff_insert_lane()),
           tip="Insère un couloir après le couloir sélectionné (ou à la fin).")
         A("cff_lane_before", "Insérer un couloir avant", "swimlane", None,
@@ -534,7 +547,8 @@ class MainWindow(QMainWindow):
 
         g = RibbonGroup("Outils")
         g.large(a["tool_select"])
-        draw_menu = self._menu(a["tool_rectangle"], a["tool_ellipse"], a["tool_line"])
+        draw_menu = self._menu(a["tool_rectangle"], a["tool_ellipse"], a["tool_line"], a["tool_freeform"],
+                               a["tool_arc"], a["tool_pencil"])
         g.column(a["tool_connector"], a["tool_text"],
                  R(None, SMALL, text="Outils de dessin", icon_name="drawing_tools", menu=draw_menu))
         home.addWidget(g)
@@ -572,7 +586,8 @@ class MainWindow(QMainWindow):
                                 a["align_top"], a["align_middle"], a["align_bottom"]),
                 tooltip="<b>Aligner</b><br>Aligne les formes sélectionnées.")
         g.large(None, text="Position", icon_name="position",
-                menu=self._menu(a["distribute_h"], a["distribute_v"], None, a["rotate_right"],
+                menu=self._menu(a["auto_align_space"], a["auto_align"], a["auto_space"], None,
+                                a["distribute_h"], a["distribute_v"], None, a["rotate_right"],
                                 a["rotate_left"], a["flip_h"], a["flip_v"]),
                 tooltip="<b>Position</b><br>Distribuer, faire pivoter, retourner.")
         g.column(R(a["front"], SMALL, menu=self._menu(a["front"], a["forward"]), split=True),
@@ -794,6 +809,13 @@ class MainWindow(QMainWindow):
         dev = self.ribbon.add_page("Développeur")
         g = RibbonGroup("Afficher")
         g.large(a["shapesheet"])
+        dev.addWidget(g)
+        g = RibbonGroup("Conception de formes")
+        g.large(None, text="Opérations", icon_name="shape_ops",
+                menu=self._menu(*[a[f"op_{op}"] for op in shapeops.OPERATIONS]),
+                tooltip="<b>Opérations</b><br>Union, Combiner, Fragmenter, Intersecter ou Soustraire les "
+                        "formes sélectionnées (la première sélectionnée sert de référence).")
+        g.column(a["tool_freeform"], a["tool_arc"], a["tool_pencil"])
         dev.addWidget(g)
         g = RibbonGroup("Interopérabilité")
         g.large(a["import_vsdx"])
@@ -1055,6 +1077,12 @@ class MainWindow(QMainWindow):
         self.a["auto_size"].blockSignals(False)
         self._on_selection()
 
+    def _shape_op(self, op: str) -> None:
+        sc = self.scene()
+        if sc is not None and not sc.shape_operation(op):
+            self.statusBar().showMessage(f"« {shapeops.OPERATIONS[op]} » : sélectionnez au moins deux formes "
+                                         "qui se chevauchent.", 6000)
+
     def _update_cff_tab(self) -> None:
         """L'onglet interfonctionnel apparaît dès qu'on utilise des couloirs, comme dans Visio."""
         if not hasattr(self, "ribbon") or self.doc is None:
@@ -1202,6 +1230,8 @@ class MainWindow(QMainWindow):
         for key in ("shapesheet", "link", "screentip", "new_comment"):
             self.a[key].setEnabled(isinstance(single, ShapeItem))
         self.a["subprocess"].setEnabled(bool(shapes))
+        for op in shapeops.OPERATIONS:
+            self.a[f"op_{op}"].setEnabled(len(shapes) >= 2)
         self.a["open_link"].setEnabled(isinstance(single, ShapeItem) and bool(single.link))
         self.a["delete_comment"].setEnabled(isinstance(single, ShapeItem) and bool(single.comments))
         self._updating_ui = True

@@ -14,6 +14,10 @@ TEMPLATE_SETUP = {
     "uml": (stencils.UML, "straight", False),
     "sample": (stencils.FLOW, "orthogonal", False),
     "cff": (stencils.CFF, "orthogonal", True),
+    "bpmn": (stencils.BPMN, "orthogonal", True),
+    "block": (stencils.BLOCK, "straight", True),
+    "erd": (stencils.DB, "straight", True),
+    "timeline": (stencils.TIMELINE, "straight", True),
 }
 
 
@@ -36,7 +40,8 @@ def _shape(sid, type_id, x_mm, y_mm, text, z):
     style, ts = fileformat.default_shape_styles(type_id, "office")
     sdef = stencils.get(type_id)
     return {"id": sid, "type": type_id, "x": mm_to_px(x_mm), "y": mm_to_px(y_mm),
-            "w": mm_to_px(sdef.size_mm[0] + 10), "h": mm_to_px(sdef.size_mm[1] + 2),
+            "w": mm_to_px(sdef.size_mm[0] + (0 if sdef.label_outside else 10)),
+            "h": mm_to_px(sdef.size_mm[1] + (0 if sdef.label_outside else 2)),
             "rotation": 0.0, "flip_h": False, "flip_v": False, "z": float(z), "text": text,
             "style": style, "text_style": ts, "data": {}, "link": "", "group": ""}
 
@@ -99,6 +104,10 @@ TEMPLATES = [
     ("network", "Diagramme réseau de base"),
     ("cff", "Diagramme de flux interfonctionnel"),
     ("uml", "Diagramme de classes UML"),
+    ("bpmn", "Diagramme BPMN de base"),
+    ("block", "Diagramme de blocs de base"),
+    ("erd", "Diagramme de base de données"),
+    ("timeline", "Chronologie"),
     ("sample", "Exemple : traitement de commande"),
 ]
 
@@ -139,6 +148,24 @@ def preview(template: str) -> dict:
                   ("c", "net.switch", 105, 110, ""), ("d", "net.server", 45, 155, ""),
                   ("e", "net.pc", 105, 155, ""), ("f", "net.laptop", 165, 155, "")]
         links = [("a", "b"), ("b", "c"), ("c", "d"), ("c", "e"), ("c", "f")]
+    elif template == "bpmn":
+        shapes = [("a", "bpmn.start", 25, 60, ""), ("b", "bpmn.task", 65, 60, "Recevoir"),
+                  ("c", "bpmn.gateway", 110, 60, ""), ("d", "bpmn.task", 150, 35, "Accepter"),
+                  ("e", "bpmn.task", 150, 85, "Refuser"), ("f", "bpmn.end", 195, 60, "")]
+        links = [("a", "b"), ("b", "c"), ("c", "d"), ("c", "e"), ("d", "f"), ("e", "f")]
+    elif template == "block":
+        shapes = [("a", "block.box", 50, 40, "Entrée"), ("b", "block.3d", 110, 40, "Traitement"),
+                  ("c", "block.box", 170, 40, "Sortie"), ("d", "block.cylinder", 110, 95, "Données")]
+        links = [("a", "b"), ("b", "c"), ("b", "d")]
+    elif template == "erd":
+        shapes = [("a", "db.entity", 50, 50, "Client"), ("b", "db.relationship", 110, 50, "passe"),
+                  ("c", "db.entity", 170, 50, "Commande"), ("d", "db.attribute", 50, 105, "Nom"),
+                  ("e", "db.attribute", 170, 105, "Date")]
+        links = [("a", "b"), ("b", "c"), ("a", "d"), ("c", "e")]
+    elif template == "timeline":
+        shapes = [("t", "time.line", 105, 70, ""), ("m1", "time.milestone", 45, 70, "Lancement"),
+                  ("m2", "time.milestone", 105, 70, "Revue"), ("m3", "time.milestone", 165, 70, "Livraison"),
+                  ("i", "time.interval", 75, 95, "Conception")]
     elif template == "uml":
         shapes = [("a", "uml.class", 60, 55, "Client"), ("b", "uml.class", 150, 55, "Commande"),
                   ("c", "uml.class", 105, 135, "Produit")]
@@ -147,9 +174,9 @@ def preview(template: str) -> dict:
         page["shapes"].append(_shape(sid, t, x, y, txt, n))
     for n, (a, b) in enumerate(links):
         c = _conn(f"c{n}", a, b, 100 + n)
-        if template in ("network", "uml"):
+        if template in ("network", "uml", "block", "erd"):
             c["style"]["route"] = "straight"
-            c["style"]["arrow_end"] = "none" if template == "network" else "triangle"
+            c["style"]["arrow_end"] = "triangle" if template in ("uml", "block") else "none"
         page["connectors"].append(c)
     doc, _w = fileformat.validate_document({"format": fileformat.FORMAT, "version": fileformat.VERSION,
                                              "settings": {}, "properties": {}, "pages": [page]})

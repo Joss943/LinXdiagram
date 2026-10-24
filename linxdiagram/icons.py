@@ -409,6 +409,47 @@ def _ellipse_tool(c):
     c.ellipse(16, 16, 13, 9.5, fill=PAPER, stroke=INK)
 
 
+@_reg("pencil", "tool_pencil")
+def _pencil(c):
+    p = QPainterPath(QPointF(4, 24))
+    p.cubicTo(8, 14, 12, 28, 17, 18)
+    p.cubicTo(20, 12, 24, 16, 28, 8)
+    c.path(p, stroke=INK, sw=1.5)
+    c.poly([(22, 3), (29, 10), (17, 22), (10, 22), (10, 15)], fill=BLUE_L, stroke=BLUE)
+
+
+@_reg("freeform", "tool_freeform")
+def _freeform(c):
+    p = QPainterPath(QPointF(5, 20))
+    p.cubicTo(3, 8, 14, 3, 20, 7)
+    p.cubicTo(30, 12, 28, 26, 18, 27)
+    p.cubicTo(10, 28, 7, 25, 5, 20)
+    c.path(p, fill=PAPER, stroke=INK)
+
+
+@_reg("arc", "tool_arc")
+def _arc_tool(c):
+    p = QPainterPath(QPointF(5, 27))
+    p.cubicTo(5, 14, 14, 5, 27, 5)
+    c.path(p, stroke=INK, sw=1.5)
+    c.rect(2, 24, 6, 6, fill=PAPER, stroke=INK)
+    c.rect(24, 2, 6, 6, fill=PAPER, stroke=INK)
+
+
+@_reg("union")
+def _union_icon(c):
+    p = QPainterPath()
+    p.addRect(QRectF(4, 8, 15, 15))
+    p.addEllipse(QPointF(20, 16), 8, 8)
+    c.path(p.simplified(), fill=BLUE_L, stroke=BLUE)
+
+
+@_reg("shape_ops")
+def _shape_ops(c):
+    c.rect(4, 8, 15, 15, fill=PAPER, stroke=INK)
+    c.ellipse(20, 16, 8, 8, fill=None, stroke=BLUE)
+
+
 @_reg("drawing_tools")
 def _drawing_tools(c):
     c.rect(3, 4, 15, 12, fill=PAPER, stroke=INK)
