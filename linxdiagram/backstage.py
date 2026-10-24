@@ -509,7 +509,7 @@ class Backstage(QWidget):
     def _pages_to_print(self):
         if self.which.currentIndex() == 1 and self.win.scene() is not None:
             return [self.win.scene()]
-        return list(self.win.doc.pages)
+        return [p for p in self.win.doc.pages if not p.is_background]  # comme Visio
 
     def _paint_preview(self, printer) -> None:
         from .export import print_pages

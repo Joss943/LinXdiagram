@@ -20,7 +20,7 @@ from PyQt6.QtGui import (QBrush, QColor, QFont, QImageReader, QKeySequence, QLin
 from PyQt6.QtWidgets import (QApplication, QGraphicsItem, QGraphicsTextItem, QMenu,
                              QStyleOptionGraphicsItem)
 
-from . import security, stencils
+from . import fields, security, stencils
 from .fileformat import MAX_TEXT, clean_data_links, normalize_status_key
 from .routing import axis_direction, curve_controls, route_orthogonal
 from .swimlanes import HEADER as CFF_HEADER, PHASE as CFF_PHASE, TITLE as CFF_TITLE
@@ -182,8 +182,9 @@ class TextOwner(QGraphicsItem):
     def _apply_label_format(self) -> None:
         ts = self.text_style
         lab = self.label
-        if not self.editing and lab.toPlainText() != self.text:
-            lab.setPlainText(self.text)
+        shown = self.display_text()
+        if not self.editing and lab.toPlainText() != shown:
+            lab.setPlainText(shown)
         lab.setFont(make_font(ts))
         lab.setDefaultTextColor(QColor(ts["color"]))
         doc = lab.document()
@@ -192,10 +193,16 @@ class TextOwner(QGraphicsItem):
         opt.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
         doc.setDefaultTextOption(opt)
 
+    def display_text(self) -> str:
+        """Texte affiché : les champs ({{page}}, {{date}}…) sont remplacés par leur valeur."""
+        return fields.resolve(self.text, self.scene()) if fields.has_fields(self.text) else self.text
+
     def start_edit(self, select_all: bool = True) -> None:
         sc = self.scene()
         if self.editing or sc is None:
             return
+        if self.label.toPlainText() != self.text:
+            self.label.setPlainText(self.text)  # en édition, les codes de champ sont visibles
         if sc.editing_item is not None and sc.editing_item is not self:
             sc.editing_item.finish_edit()
         self._edit_before = self.state()

@@ -20,13 +20,13 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, Q
                              QStackedWidget, QTabBar, QToolButton, QVBoxLayout, QWidget, QWidgetAction)
 
 from . import (APP_NAME, __version__, FILE_EXT, datavis, export, fileformat, icons, quickstyles, security,
-               shapeops, stencils, swimlanes, templates, vsdx)
+               fields, shapeops, spellcheck, stencils, swimlanes, templates, vsdx)
 from .backstage import Backstage
 from .canvas import CanvasArea
 from .commands import DocSettingsCommand, PageCommand
 from .dialogs import (DataGraphicDialog, DataImportDialog, DataLinkDialog, FindReplaceDialog,
                       ImageExportDialog, LayersDialog, OptionsDialog, PageSetupDialog, PasswordDialog, PropertiesDialog,
-                      ShapeSheetDialog, ShortcutsDialog, ZoomDialog)
+                      ShapeSheetDialog, ShortcutsDialog, ZoomDialog, FieldDialog, SpellDialog)
 from .document import Document
 from .items import ConnectorItem, ShapeItem, decode_image
 from .panes import (CommentsPane, DrawingExplorerPane, FormatPane, IssuesPane, PanZoomPane,
@@ -316,6 +316,15 @@ class MainWindow(QMainWindow):
         A("page_dup", "Dupliquer la page", "page_dup", None, self.duplicate_page)
         A("page_del", "Supprimer la page", "page_del", None, self.delete_page)
         A("page_rename", "Renommer la page…", "page_rename", None, self.rename_page)
+        A("spelling", "Orthographe", "spelling", "F7", self.check_spelling,
+          tip="Vérifie l'orthographe de tous les textes du document (dictionnaires Hunspell du système).")
+        A("insert_field", "Champ", "field", None, self.insert_field,
+          tip="Insère un champ qui se met à jour : date, heure, numéro de page, nom du fichier…")
+        A("page_background_new", "Page d'arrière-plan", "background_page", None, self.add_background_page,
+          tip="Insère une page d'arrière-plan (cartouche, logo, filigrane) affichée derrière les pages "
+              "qui l'utilisent.")
+        A("page_is_background", "Page d'arrière-plan", None, None, self.toggle_background_page, checkable=True,
+          label="Utiliser comme page d'arrière-plan")
         A("image", "Images", "image", None, self.insert_image_dialog, tip="Insère une image PNG ou JPEG.")
         A("textbox", "Zone de texte", "textbox", None, lambda: self._insert("basic.text"))
         A("link", "Lien hypertexte…", "link", "Ctrl+K", self.edit_link, label="Lien")
@@ -705,7 +714,8 @@ class MainWindow(QMainWindow):
         # ======================================================= Insertion
         ins = self.ribbon.add_page("Insertion")
         g = RibbonGroup("Pages")
-        g.large(a["page_add"], menu=self._menu(a["page_add"], a["page_dup"], a["page_rename"], a["page_del"]),
+        g.large(a["page_add"], menu=self._menu(a["page_add"], a["page_background_new"], a["page_dup"],
+                                               a["page_rename"], a["page_del"]),
                 split=True)
         ins.addWidget(g)
         g = RibbonGroup("Illustrations")
@@ -739,7 +749,7 @@ class MainWindow(QMainWindow):
         wa = QWidgetAction(sym)
         wa.setDefaultWidget(holder)
         sym.addAction(wa)
-        g.column(a["screentip"], R(None, SMALL, text="Symbole", icon_name="symbol", menu=sym))
+        g.column(a["screentip"], R(None, SMALL, text="Symbole", icon_name="symbol", menu=sym), a["insert_field"])
         ins.addWidget(g)
 
         # ======================================================= Création
@@ -831,6 +841,9 @@ class MainWindow(QMainWindow):
 
         # ======================================================= Révision
         rev = self.ribbon.add_page("Révision")
+        g = RibbonGroup("Vérification")
+        g.large(a["spelling"])
+        rev.addWidget(g)
         g = RibbonGroup("Commentaires")
         g.large(a["new_comment"])
         g.column(R(a["delete_comment"], SMALL, text="Supprimer"), a["prev_comment"], a["next_comment"])
@@ -1154,7 +1167,10 @@ class MainWindow(QMainWindow):
         while self.page_tabs.count():
             self.page_tabs.removeTab(0)
         for p in doc.pages:
-            self.page_tabs.addTab(p.page_name)
+            i = self.page_tabs.addTab(p.page_name)
+            if p.is_background:
+                self.page_tabs.setTabIcon(i, icons.icon("background_page"))
+                self.page_tabs.setTabToolTip(i, "Page d'arrière-plan")
         cur = self.scene()
         if cur in doc.pages:
             self.page_tabs.setCurrentIndex(doc.pages.index(cur))
@@ -1273,6 +1289,11 @@ class MainWindow(QMainWindow):
         for i, p in enumerate(self.doc.pages):
             if i < self.page_tabs.count() and self.page_tabs.tabText(i) != p.page_name:
                 self.page_tabs.setTabText(i, p.page_name)
+            if i < self.page_tabs.count():
+                self.page_tabs.setTabIcon(i, icons.icon("background_page") if p.is_background else QIcon())
+        self._update_page_type_actions()
+        for p in self.doc.pages:
+            p.refresh_fields()
         sc = self.scene()
         if sc is not None:
             self.a["auto_size"].blockSignals(True)
@@ -1462,6 +1483,9 @@ class MainWindow(QMainWindow):
     def delete(self) -> None:
         sc = self.scene()
         if sc is None:
+            return
+        if sc.selected_guide is not None and not sc.selected_all():
+            sc.remove_guide(sc.selected_guide)
             return
         locked = [s for s in sc.selected_shapes() if s.locked]
         sc.delete_selection()
@@ -2267,15 +2291,146 @@ class MainWindow(QMainWindow):
         name, ok = QInputDialog.getText(self, "Renommer la page", "Nom de la page :", text=sc.page_name)
         name = security.clean_line(name, 100)
         if ok and name and name != sc.page_name:
-            before = sc.page_props()
-            self.doc.undo_stack.push(PageCommand(self.doc, "Renommer la page", scene=sc, before=before,
-                                                 after=dict(before, name=name)))
+            name = self.doc.unique_page_name(name) if any(p.page_name == name for p in self.doc.pages) else name
+            old = sc.page_name
+            self.doc.undo_stack.beginMacro("Renommer la page")
+            try:
+                before = sc.page_props()
+                self.doc.undo_stack.push(PageCommand(self.doc, "Renommer la page", scene=sc, before=before,
+                                                     after=dict(before, name=name)))
+                # Les pages qui utilisaient cet arrière-plan le gardent.
+                for p in self.doc.pages:
+                    if sc.is_background and p.backpage == old:
+                        b = p.page_props()
+                        self.doc.undo_stack.push(PageCommand(self.doc, "Renommer la page", scene=p, before=b,
+                                                             after=dict(b, backpage=name)))
+            finally:
+                self.doc.undo_stack.endMacro()
+            self.show_page(sc)
+
+    def check_spelling(self) -> None:
+        """Révision > Orthographe (F7) : page active d'abord, puis les autres pages."""
+        if getattr(self.ctx, "speller", None) is None:
+            base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+            folder = security.private_dir(os.path.join(base, APP_NAME))
+            self.ctx.speller = spellcheck.SpellChecker(os.path.join(folder, "dictionnaire.txt"))
+        checker = self.ctx.speller
+        if not checker.available:
+            QMessageBox.information(self, "Orthographe", "Aucun dictionnaire Hunspell n'est installé.\n"
+                                    "Installez par exemple le paquet « hunspell-fr » de votre distribution.")
+            return
+        sc = self.scene()
+        if sc is not None and sc.editing_item is not None:
+            sc.editing_item.finish_edit()
+        pages = ([sc] if sc in self.doc.pages else []) + [p for p in self.doc.pages if p is not sc]
+        targets = []
+        for p in pages:
+            items = [it for it in p.all_items() if it.text.strip()]
+            items.sort(key=lambda it: (round(it.sceneBoundingRect().top() / 20), it.sceneBoundingRect().left()))
+            targets += [(p, it) for it in items]
+        dlg = SpellDialog(self, checker, targets)
+        if not dlg.start():
+            QMessageBox.information(self, "Orthographe", "La vérification orthographique est terminée : "
+                                    "aucune faute trouvée.")
+            return
+        dlg.exec()
+
+    def insert_field(self) -> None:
+        """Insertion > Champ : ajoute un champ au texte en cours, à la forme sélectionnée ou à une zone
+        de texte nouvelle, comme dans Visio."""
+        sc = self.scene()
+        if sc is None:
+            return
+        dlg = FieldDialog(self, sc)
+        if not dlg.exec():
+            return
+        tok = fields.token(dlg.field())
+        if sc.editing_item is not None:
+            sc.editing_item.label.textCursor().insertText(tok)
+            return
+        single = sc.single_selected
+        if single is not None and not getattr(single, "locked", False):
+            sc.modify([single], lambda _it, st: st.update(text=(st["text"] + " " + tok).strip()), "Insérer un champ")
+            return
+        st = sc.new_shape_state("basic.text", sc.page_rect().center())
+        st["text"] = tok
+        sc.add_states([st], "Insérer un champ")
+        sc.select_items([sc.item_by_id(st["id"])])
+
+    def add_background_page(self) -> None:
+        """Insertion > Page d'arrière-plan : nouvelle page affectée à la page active si elle n'en a pas."""
+        sc = self.scene()
+        data = fileformat.default_page(self.doc.unique_page_name("Arrière-plan"))
+        if sc is not None:
+            data.update(width=sc.page_w, height=sc.page_h)
+        data["is_background"] = True
+        page = self.doc.make_page(data=data)
+        self.doc.undo_stack.beginMacro("Insérer une page d'arrière-plan")
+        try:
+            self.doc.undo_stack.push(PageCommand(self.doc, "Insérer une page d'arrière-plan", add=page,
+                                                 index=len(self.doc.pages)))
+            if sc is not None and not sc.is_background and not sc.backpage:
+                b = sc.page_props()
+                self.doc.undo_stack.push(PageCommand(self.doc, "Arrière-plan", scene=sc, before=b,
+                                                     after=dict(b, backpage=page.page_name)))
+        finally:
+            self.doc.undo_stack.endMacro()
+        self.show_page(page)
+
+    def set_backpage(self, name: str) -> None:
+        sc = self.scene()
+        if sc is None or sc.page_name == name or sc.backpage == name:
+            return
+        b = sc.page_props()
+        self.doc.undo_stack.push(PageCommand(self.doc, "Arrière-plan de la page", scene=sc, before=b,
+                                             after=dict(b, backpage=name)))
+
+    def toggle_background_page(self, on: bool) -> None:
+        sc = self.scene()
+        if sc is None or sc.is_background == on:
+            return
+        if on and sum(1 for p in self.doc.pages if not p.is_background) <= 1:
+            self.statusBar().showMessage("Le document doit garder au moins une page de premier plan.", 6000)
+            self._update_page_type_actions()
+            return
+        b = sc.page_props()
+        self.doc.undo_stack.push(PageCommand(self.doc, "Type de page", scene=sc, before=b,
+                                             after=dict(b, is_background=on, backpage="" if on else b["backpage"])))
+
+    def _backpage_menu(self) -> QMenu:
+        m = QMenu("Arrière-plan de la page", self)
+        m.setIcon(icons.icon("background_page"))
+
+        def fill():
+            m.clear()
+            sc = self.scene()
+            group = QActionGroup(m)
+            for name in [""] + [p.page_name for p in self.doc.pages if p.is_background and p is not sc]:
+                act = m.addAction(name or "Aucun")
+                act.setCheckable(True)
+                act.setChecked(sc is not None and sc.backpage == name)
+                group.addAction(act)
+                act.triggered.connect(lambda _=False, n=name: self.set_backpage(n))
+            m.addSeparator()
+            m.addAction(self.a["page_background_new"])
+        m.aboutToShow.connect(fill)
+        return m
+
+    def _update_page_type_actions(self) -> None:
+        sc = self.scene()
+        act = self.a.get("page_is_background")
+        if act is not None and sc is not None:
+            act.blockSignals(True)
+            act.setChecked(sc.is_background)
+            act.blockSignals(False)
 
     def _page_menu(self, pos) -> None:
         idx = self.page_tabs.tabAt(pos)
         if idx >= 0:
             self.show_page(self.doc.pages[idx])
+        self._update_page_type_actions()
         m = self._menu(self.a["page_add"], self.a["page_dup"], self.a["page_rename"], self.a["page_del"], None,
+                       self.a["page_background_new"], self.a["page_is_background"], self._backpage_menu(), None,
                        self.a["page_setup"])
         m.exec(self.page_tabs.mapToGlobal(pos))
 
@@ -2772,7 +2927,8 @@ class MainWindow(QMainWindow):
         path = self._export_path("Exporter en PDF", "Document PDF (*.pdf)", ".pdf")
         if path:
             title = self.doc.properties.get("title") or self.doc_title()
-            self._run_export(lambda: export.export_pdf(self.doc.pages, path, title), path)
+            pages = [p for p in self.doc.pages if not p.is_background] or list(self.doc.pages)
+            self._run_export(lambda: export.export_pdf(pages, path, title), path)
 
     def export_image(self, kind: str) -> None:
         sc = self.scene()

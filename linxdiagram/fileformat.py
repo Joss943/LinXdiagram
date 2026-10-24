@@ -495,10 +495,30 @@ def clean_properties(raw) -> dict:
     return {k: _line(raw.get(k), 300) for k in ("title", "subject", "author", "company", "keywords")}
 
 
+MAX_GUIDES = 200
+
+
+def clean_guides(raw) -> list[dict]:
+    """Repères de la page : {"o": "h" ou "v", "pos": coordonnée en px}."""
+    out = []
+    for g in raw if isinstance(raw, list) else []:
+        g = _dict(g)
+        if g.get("o") not in ("h", "v"):
+            continue
+        pos = _num(g.get("pos"), -MAX_COORD_PX, MAX_COORD_PX, float("nan"))
+        if math.isnan(pos):
+            continue
+        out.append({"o": g["o"], "pos": pos})
+        if len(out) >= MAX_GUIDES:
+            break
+    return out
+
+
 def default_page(name: str = "Page-1") -> dict:
     w, h = PAGE_SIZES[DEFAULT_PAGE]
     return {"name": name, "width": mm_to_px(w), "height": mm_to_px(h), "background": "#ffffff",
-            "auto_size": False, "layers": [], "shapes": [], "connectors": []}
+            "auto_size": False, "layers": [], "guides": [], "is_background": False,
+            "backpage": "", "shapes": [], "connectors": []}
 
 
 # ------------------------------------------------------------------- document
@@ -541,6 +561,9 @@ def validate_document(raw) -> tuple[dict, list[str]]:
             "background": _color(praw.get("background"), "#ffffff", allow_none=False),
             "auto_size": _bool(praw.get("auto_size"), False),
             "layers": clean_layers(praw.get("layers")),
+            "guides": clean_guides(praw.get("guides")),
+            "is_background": _bool(praw.get("is_background"), False),
+            "backpage": _line(praw.get("backpage"), 100),
             "shapes": shapes,
             "connectors": connectors,
         })

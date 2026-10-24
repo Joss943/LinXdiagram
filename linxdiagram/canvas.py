@@ -324,6 +324,46 @@ class Ruler(QWidget):
         self.marker = p.x() if self.horizontal else p.y()
         self.update()
 
+    # Comme dans Visio : faire glisser depuis une règle crée un repère sur la page.
+    def _scene_point(self, global_pos) -> tuple[QPointF, bool]:
+        vp = self.view.viewport()
+        local = vp.mapFromGlobal(global_pos)
+        return self.view.mapToScene(local), vp.rect().contains(local)
+
+    def mousePressEvent(self, event):  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton and self.view.scene() is not None:
+            self._dragging = True
+            self.setCursor(Qt.CursorShape.SplitVCursor if self.horizontal else Qt.CursorShape.SplitHCursor)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):  # noqa: N802
+        sc = self.view.scene()
+        if getattr(self, "_dragging", False) and sc is not None:
+            p, inside = self._scene_point(event.globalPosition().toPoint())
+            p = sc.snap_point(p)
+            sc.guide_preview = {"o": "h", "pos": p.y()} if self.horizontal else {"o": "v", "pos": p.x()}
+            if not inside:
+                sc.guide_preview = None
+            sc.update()
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):  # noqa: N802
+        sc = self.view.scene()
+        if getattr(self, "_dragging", False) and sc is not None:
+            self._dragging = False
+            self.unsetCursor()
+            preview, sc.guide_preview = sc.guide_preview, None
+            if preview is not None:
+                sc.add_guide(preview["o"], preview["pos"])
+            sc.update()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
     def paintEvent(self, event):  # noqa: N802
         p = QPainter(self)
         pal = self.palette()

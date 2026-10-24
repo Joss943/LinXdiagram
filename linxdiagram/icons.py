@@ -448,6 +448,21 @@ def _shape_ops(c):
     c.ellipse(20, 16, 8, 8, fill=None, stroke=BLUE)
 
 
+@_reg("field")
+def _field(c):
+    c.rect(3, 6, 26, 20, fill=PAPER, stroke=INK)
+    c.rect(7, 12, 18, 8, fill=BLUE_L, stroke=BLUE)
+    c.line(10, 16, 22, 16, BLUE, 1.5)
+
+
+@_reg("spelling")
+def _spelling(c):
+    c.line(4, 9, 8, 22, INK, 1.5)
+    c.line(8, 22, 12, 9, INK, 1.5)
+    c.line(5.5, 17, 10.5, 17, INK, 1.2)
+    c.poly([(14, 19), (19, 25), (29, 10)], stroke=BLUE, sw=2.2, closed=False)
+
+
 @_reg("drawing_tools")
 def _drawing_tools(c):
     c.rect(3, 4, 15, 12, fill=PAPER, stroke=INK)

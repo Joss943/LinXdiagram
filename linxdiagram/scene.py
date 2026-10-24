@@ -10,7 +10,7 @@ from PyQt6.QtCore import QLineF, QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen, QPolygonF
 from PyQt6.QtWidgets import QApplication, QGraphicsScene
 
-from . import fileformat, layout, quickstyles, shapeops, stencils, swimlanes
+from . import fields, fileformat, layout, quickstyles, shapeops, stencils, swimlanes
 from .commands import AddItemsCommand, RemoveItemsCommand, StateCommand, _shapes_first
 from .items import ACCENT, GLUE, ConnectorItem, ShapeItem, TextLabel, make_item
 from .units import GRID_PX, connector_style, connector_text_style, mm_to_px
@@ -39,6 +39,7 @@ def paint_canvas_backdrop(painter: QPainter, rect: QRectF) -> None:
 GRID_MINOR = QColor("#eceff3")
 GRID_MAJOR = QColor("#d7dce3")
 GUIDE = QColor("#d6336c")
+GUIDE_RULER = QColor("#2f6fd6")  # repères tirés des règles
 AC_DIRS = ((0, -1), (1, 0), (0, 1), (-1, 0))
 
 
@@ -80,6 +81,16 @@ class DiagramScene(QGraphicsScene):
         self.page_bg = page["background"]
         self.auto_size = page.get("auto_size", False)
         self.layers: list[dict] = [dict(lay) for lay in page.get("layers", [])]
+        # Repères tirés des règles (comme dans Visio) ; les formes s'y aimantent.
+        self.ruler_guides: list[dict] = [dict(g) for g in page.get("guides", [])]
+        # Pages d'arrière-plan (comme Visio) : une page de premier plan peut afficher derrière
+        # son contenu celui d'une page marquée « arrière-plan ».
+        self.is_background = bool(page.get("is_background", False))
+        self.backpage = page.get("backpage", "")
+        self._painting_back = False
+        self.selected_guide: int | None = None
+        self.guide_preview: dict | None = None
+        self._guide_drag: dict | None = None
         self._items: dict[str, ShapeItem | ConnectorItem] = {}
         self._conn_index: dict[str, set[str]] = {}
         self._conn_ends: dict[str, tuple[str, str]] = {}
@@ -209,7 +220,9 @@ class DiagramScene(QGraphicsScene):
     def page_props(self) -> dict:
         return {"name": self.page_name, "width": self.page_w, "height": self.page_h,
                 "background": self.page_bg, "auto_size": self.auto_size,
-                "layers": [dict(lay) for lay in self.layers]}
+                "layers": [dict(lay) for lay in self.layers],
+                "guides": [dict(g) for g in self.ruler_guides],
+                "is_background": self.is_background, "backpage": self.backpage}
 
     def set_page_props(self, props: dict) -> None:
         self.page_name = props["name"]
@@ -218,10 +231,73 @@ class DiagramScene(QGraphicsScene):
         self.page_bg = props["background"]
         self.auto_size = props.get("auto_size", self.auto_size)
         self.layers = [dict(lay) for lay in props.get("layers", self.layers)]
+        self.ruler_guides = [dict(g) for g in props.get("guides", self.ruler_guides)]
+        self.is_background = props.get("is_background", self.is_background)
+        self.backpage = props.get("backpage", self.backpage)
+        if self.selected_guide is not None and self.selected_guide >= len(self.ruler_guides):
+            self.selected_guide = None
         self.apply_layers()
         self.update_scene_rect()
         self.update()
         self.doc.pagesChanged.emit()
+
+    def refresh_fields(self) -> None:
+        """Met à jour les champs affichés (numéro de page, date…) après un changement."""
+        for it in self._items.values():
+            if fields.has_fields(it.text) and not it.editing:
+                it.layout_label()
+
+    # ------------------------------------------------------------------ repères
+    def guide_at(self, pos: QPointF) -> int | None:
+        tol = 4.0 / max(self.view_scale, 0.05)
+        best = None
+        for i, g in enumerate(self.ruler_guides):
+            d = abs((pos.y() if g["o"] == "h" else pos.x()) - g["pos"])
+            if d <= tol and (best is None or d < best[0]):
+                best = (d, i)
+        return best[1] if best else None
+
+    def _set_guides(self, guides: list[dict], text: str) -> None:
+        from .commands import PageCommand
+        before = self.page_props()
+        after = dict(before, guides=guides)
+        self.doc.undo_stack.push(PageCommand(self.doc, text, scene=self, before=before, after=after))
+
+    def add_guide(self, orientation: str, pos: float) -> None:
+        self._set_guides(self.ruler_guides + [{"o": orientation, "pos": float(pos)}], "Ajouter un repère")
+        self.selected_guide = len(self.ruler_guides) - 1
+
+    def move_guide(self, index: int, pos: float) -> None:
+        guides = [dict(g) for g in self.ruler_guides]
+        guides[index]["pos"] = float(pos)
+        self._set_guides(guides, "Déplacer un repère")
+
+    def remove_guide(self, index: int) -> None:
+        guides = [g for i, g in enumerate(self.ruler_guides) if i != index]
+        self.selected_guide = None
+        self._set_guides(guides, "Supprimer un repère")
+
+    def _paint_ruler_guides(self, painter: QPainter, rect: QRectF) -> None:
+        s = self.view_scale
+        area = self.sceneRect().united(rect)
+        for i, g in enumerate(self.ruler_guides):
+            if self._guide_drag is not None and self._guide_drag["i"] == i:
+                continue
+            selected = i == self.selected_guide
+            pen = QPen(GUIDE_RULER, (2.0 if selected else 1.0) / s,
+                       Qt.PenStyle.SolidLine if selected else Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            if g["o"] == "h":
+                painter.drawLine(QLineF(area.left(), g["pos"], area.right(), g["pos"]))
+            else:
+                painter.drawLine(QLineF(g["pos"], area.top(), g["pos"], area.bottom()))
+        if self.guide_preview is not None:
+            painter.setPen(QPen(GUIDE_RULER, 1.5 / s))
+            g = self.guide_preview
+            if g["o"] == "h":
+                painter.drawLine(QLineF(area.left(), g["pos"], area.right(), g["pos"]))
+            else:
+                painter.drawLine(QLineF(g["pos"], area.top(), g["pos"], area.bottom()))
 
     # ------------------------------------------------------------------ calques
     def layer(self, name: str) -> dict | None:
@@ -282,15 +358,39 @@ class DiagramScene(QGraphicsScene):
                 "connectors": [i.state() for i in items if isinstance(i, ConnectorItem)]}
 
     # ------------------------------------------------------------------ dessin
+    def backpage_scene(self):
+        """Page d'arrière-plan affectée à cette page (None si aucune)."""
+        if not self.backpage or self.is_background and self.backpage == self.page_name:
+            return None
+        for p in self.doc.pages:
+            if p is not self and p.is_background and p.page_name == self.backpage:
+                return p
+        return None
+
+    def _paint_backpage(self, painter: QPainter) -> None:
+        bg = self.backpage_scene()
+        if bg is None or bg._painting_back or self._painting_back:
+            return
+        from .export import exporting  # import local : évite un cycle au chargement
+        self._painting_back = True
+        try:
+            with exporting(bg, transparent=True):
+                src = bg.page_rect()
+                bg.render(painter, QRectF(0, 0, src.width(), src.height()), src)
+        finally:
+            self._painting_back = False
+
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:  # noqa: N802
         page = self.page_rect()
         if self.exporting:
             painter.fillRect(rect, QColor(self.page_bg))
+            self._paint_backpage(painter)
             return
         paint_canvas_backdrop(painter, rect)
         s = self.view_scale
         painter.fillRect(page.translated(3 / s, 3 / s), QColor(0, 0, 0, 45))
         painter.fillRect(page, QColor(self.page_bg))
+        self._paint_backpage(painter)
         if self.doc.settings["grid"]:
             area = rect.intersected(page)
             if not area.isEmpty():
@@ -344,6 +444,8 @@ class DiagramScene(QGraphicsScene):
                     painter.drawEllipse(self._draw["rect"])
                 else:
                     painter.drawRect(self._draw["rect"])
+        if self.ruler_guides or self.guide_preview is not None:
+            self._paint_ruler_guides(painter, rect)
         if self.guides:
             painter.setPen(QPen(GUIDE, 1 / s, Qt.PenStyle.DashLine))
             for line in self.guides:
@@ -567,6 +669,19 @@ class DiagramScene(QGraphicsScene):
                 self.autoconnect(self.hover_shape, d)
                 event.accept()
                 return
+        if tool == "select" and self.ruler_guides:
+            gi = self.guide_at(pos)
+            if gi is not None and self.top_item_at(pos) is None:
+                self.clearSelection()
+                self.selected_guide = gi
+                self._guide_drag = {"i": gi, "start": QPointF(pos)}
+                self.guide_preview = dict(self.ruler_guides[gi])
+                self.update()
+                event.accept()
+                return
+        if self.selected_guide is not None:
+            self.selected_guide = None
+            self.update()
         for item in self.selectedItems():
             if isinstance(item, ConnectorItem):
                 which = item.end_handle_at(pos)
@@ -643,6 +758,13 @@ class DiagramScene(QGraphicsScene):
     def mouseMoveEvent(self, event):  # noqa: N802
         pos = event.scenePos()
         self._mouse = pos
+        if self._guide_drag is not None:
+            g = self.ruler_guides[self._guide_drag["i"]]
+            p = self.snap_point(pos)
+            self.guide_preview = {"o": g["o"], "pos": p.y() if g["o"] == "h" else p.x()}
+            self.update()
+            event.accept()
+            return
         if self._conn_drag is not None:
             self._update_conn_drag(pos)
             event.accept()
@@ -695,6 +817,18 @@ class DiagramScene(QGraphicsScene):
     def mouseReleaseEvent(self, event):  # noqa: N802
         pos = event.scenePos()
         self._mouse = pos
+        if self._guide_drag is not None:
+            d, self._guide_drag = self._guide_drag, None
+            preview, self.guide_preview = self.guide_preview, None
+            views = self.views()
+            visible = views[0].mapToScene(views[0].viewport().rect()).boundingRect() if views else None
+            if visible is not None and not visible.contains(pos):
+                self.remove_guide(d["i"])          # ramené sur la règle : supprimé, comme dans Visio
+            elif preview is not None and (pos - d["start"]).manhattanLength() * self.view_scale > 2:
+                self.move_guide(d["i"], preview["pos"])
+            self.update()
+            event.accept()
+            return
         if self._conn_drag is not None:
             self._finish_conn_drag(pos)
             event.accept()
@@ -869,6 +1003,19 @@ class DiagramScene(QGraphicsScene):
                         d = vy - y
                         if abs(d) <= tol and (adj_y is None or abs(d) < abs(adj_y)):
                             adj_y, hit_y = d, (vy, ob)
+        if self.ruler_guides:
+            tol = GUIDE_TOL_PX / s
+            for gd in self.ruler_guides:
+                refs = (box.left(), box.center().x(), box.right()) if gd["o"] == "v" else \
+                    (box.top(), box.center().y(), box.bottom())
+                for v in refs:
+                    d = gd["pos"] - v
+                    if abs(d) > tol:
+                        continue
+                    if gd["o"] == "v" and (adj_x is None or abs(d) < abs(adj_x)):
+                        adj_x, hit_x = d, None
+                    elif gd["o"] == "h" and (adj_y is None or abs(d) < abs(adj_y)):
+                        adj_y, hit_y = d, None
         if self.snap_enabled:
             square = abs(round(g.rotation() / 90.0) * 90.0 - g.rotation()) < 0.01
             ref_x = box.left() if square else box.center().x()
