@@ -354,6 +354,7 @@ class MainWindow(QMainWindow):
         self.ribbon = Ribbon()
         self.ribbon.fileRequested.connect(lambda: self.show_backstage("home"))
         el.addWidget(self.ribbon)
+        self.ribbon.set_collapsed(self.settings.value("layout/ribbon_collapsed", False, type=bool))
         if self.native_frame:
             from .titlebar import CommandSearch
             self.search_box = CommandSearch(self)
@@ -396,6 +397,9 @@ class MainWindow(QMainWindow):
         self.splitter.addWidget(self.task_panes)
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setSizes([250, 900, 300])
+        splitter_state = self.settings.value("layout/editor_splitter")
+        if splitter_state:
+            self.splitter.restoreState(splitter_state)
         el.addWidget(self.splitter, 1)
         self.backstage = Backstage(self)
         self.backstage.back.connect(self.hide_backstage)
@@ -2446,6 +2450,8 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self.settings.setValue("window/geometry", self.saveGeometry())
+        self.settings.setValue("layout/editor_splitter", self.splitter.saveState())
+        self.settings.setValue("layout/ribbon_collapsed", self.ribbon.is_collapsed())
         self.autosave_timer.stop()
         if self.quick_popup is not None:
             self.quick_popup.hide()

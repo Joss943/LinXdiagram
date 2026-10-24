@@ -32,7 +32,10 @@ class DiagramView(QGraphicsView):
         self.setRubberBandSelectionMode(Qt.ItemSelectionMode.ContainsItemShape)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
-        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
+        # SmartViewportUpdate redraws only the changed areas for ordinary edits, then
+        # falls back to a larger redraw when many regions change at once. This keeps
+        # large diagrams responsive without leaving stale grid or guide pixels behind.
+        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.SmartViewportUpdate)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setAcceptDrops(True)
         self.setMouseTracking(True)

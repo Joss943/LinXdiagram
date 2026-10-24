@@ -43,6 +43,9 @@ Carlito (métriquement identique à Calibri) est utilisée si elle est installé
   Nouveau, Ouvrir, Informations (protection, propriétés), Imprimer avec **aperçu intégré**, Exporter.
 * **Menu contextuel avec mini-barre** (police, taille, gras, style rapide, remplissage, trait).
 * Thème **« En couleur »** par défaut, thème **Noir** disponible (Fichier > Options).
+* La largeur des volets Formes et Format, ainsi que l'état du ruban réduit, sont mémorisés entre
+  les sessions. Le canevas ne redessine que les zones modifiées lorsque c'est possible, ce qui
+  améliore la réactivité des grands diagrammes.
 
 ## Fonctions Visio
 
