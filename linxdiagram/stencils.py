@@ -338,6 +338,50 @@ def _b_wifi():
     return _union(box, antenna), detail
 
 
+def _b_load_balancer():
+    outline = _rrect(0.04, 0.12, 0.92, 0.76, 0.08)
+    detail = _lines([(0.18, 0.36), (0.8, 0.36), (0.68, 0.24), (0.8, 0.36), (0.68, 0.48)],
+                    [(0.82, 0.64), (0.2, 0.64), (0.32, 0.52), (0.2, 0.64), (0.32, 0.76)])
+    return outline, detail
+
+
+def _b_rack():
+    outline = _rrect(0.12, 0, 0.76, 1, 0.04)
+    detail = QPainterPath()
+    for y in (0.2, 0.4, 0.6, 0.8):
+        detail.addPath(_lines([(0.2, y), (0.8, y)]))
+        detail.addEllipse(QPointF(0.29, y - 0.1), 0.035, 0.035)
+        detail.addEllipse(QPointF(0.4, y - 0.1), 0.035, 0.035)
+    return outline, detail
+
+
+def _b_vm():
+    monitor = _rrect(0.05, 0.02, 0.9, 0.7, 0.04)
+    stand = _lines([(0.5, 0.72), (0.5, 0.88)], [(0.3, 0.9), (0.7, 0.9)])
+    detail = _poly_path([(0.5, 0.18), (0.72, 0.3), (0.72, 0.52), (0.5, 0.64), (0.28, 0.52), (0.28, 0.3)])
+    detail.addPath(_lines([(0.5, 0.18), (0.5, 0.42), (0.72, 0.3)], [(0.5, 0.42), (0.28, 0.3)],
+                          [(0.5, 0.42), (0.5, 0.64)]))
+    detail.addPath(stand)
+    return monitor, detail
+
+
+def _b_storage():
+    outline = _rrect(0.12, 0.08, 0.76, 0.84, 0.06)
+    detail = _lines([(0.12, 0.35), (0.88, 0.35)], [(0.12, 0.63), (0.88, 0.63)])
+    for y in (0.21, 0.49, 0.77):
+        detail.addEllipse(QPointF(0.72, y), 0.04, 0.04)
+    return outline, detail
+
+
+def _b_vpn():
+    shield = _poly_path([(0.5, 0.02), (0.9, 0.17), (0.85, 0.58), (0.5, 0.96),
+                         (0.15, 0.58), (0.1, 0.17)])
+    detail = _rrect(0.3, 0.42, 0.4, 0.3, 0.04)
+    detail.addPath(_ellipse(0.5, 0.39, 0.13, 0.13))
+    detail.addPath(_lines([(0.5, 0.55), (0.5, 0.63)]))
+    return shield, detail
+
+
 def _b_user():
     head = _ellipse(0.5, 0.25, 0.22, 0.24)
     body = QPainterPath()
@@ -746,6 +790,26 @@ _DEFS: list[ShapeDef] = [
              label_outside=True, keywords="téléphone smartphone"),
     ShapeDef("net.wifi", "Point d'accès Wi-Fi", NET, _unit(_b_wifi), (22, 20), text_rect=_LABEL_BELOW,
              label_outside=True, keywords="sans fil wifi borne"),
+    ShapeDef("net.load_balancer", "Équilibreur de charge", NET, _unit(_b_load_balancer), (34, 20),
+             text_rect=_LABEL_BELOW, label_outside=True, keywords="load balancer répartiteur trafic réseau",
+             style={"fill": "#d9eaf7", "line": "#356e9f", "themed": False}),
+    ShapeDef("net.rack", "Baie de serveurs", NET, _unit(_b_rack), (22, 34), text_rect=_LABEL_BELOW,
+             label_outside=True, keywords="rack armoire serveur datacenter",
+             style={"fill": "#d9e2f3", "line": "#44546a", "themed": False}),
+    ShapeDef("net.vm", "Machine virtuelle", NET, _unit(_b_vm), (24, 22), text_rect=_LABEL_BELOW,
+             label_outside=True, keywords="virtual machine vm hyperviseur",
+             style={"fill": "#eaf2f8", "line": "#356e9f", "themed": False}),
+    ShapeDef("net.storage", "Stockage réseau", NET, _unit(_b_storage), (20, 26), text_rect=_LABEL_BELOW,
+             label_outside=True, keywords="nas san disque stockage cloud",
+             style={"fill": "#e2f0d9", "line": "#548235", "themed": False}),
+    ShapeDef("net.vpn", "Passerelle VPN", NET, _unit(_b_vpn), (18, 24), text_rect=_LABEL_BELOW,
+             label_outside=True, keywords="vpn tunnel accès distant sécurisé",
+             style={"fill": "#d9eaf7", "line": "#356e9f", "themed": False}),
+    ShapeDef("net.subnet", "Frontière réseau", NET, _unit(_b_container), (90, 60), SIDES_AND_CORNERS,
+             text_rect=(0, 0, 1, 0.14), keywords="sous-réseau subnet zone sécurité vpc vlan",
+             style={"fill": "#f0f5fb", "line": "#356e9f", "dash": "dash", "themed": False},
+             text={"color": "#1f3864", "bold": True, "halign": "left", "valign": "middle"},
+             container=True, default_text="Réseau privé"),
     ShapeDef("net.user", "Utilisateur", NET, _unit(_b_user), (18, 20), text_rect=_LABEL_BELOW,
              label_outside=True, keywords="personne client"),
 

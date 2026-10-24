@@ -61,6 +61,46 @@ def build(template: str) -> dict:
     if template == "cff":
         page["shapes"] = cff_states("h", 15, 15, ["Fonction", "Fonction", "Fonction"],
                                     "Titre du diagramme", length_mm=265, lane_mm=48)
+    if template == "org":
+        shapes = [("a", "org.executive", 105, 30, "Direction"),
+                  ("b", "org.manager", 55, 75, "Ventes"),
+                  ("c", "org.manager", 155, 75, "Production"),
+                  ("d", "org.employee", 30, 120, ""), ("e", "org.employee", 80, 120, ""),
+                  ("f", "org.employee", 155, 120, "")]
+        page["shapes"] = [_shape(i, t, x, y, text, n) for n, (i, t, x, y, text) in enumerate(shapes)]
+        links = [("a", "b"), ("a", "c"), ("b", "d"), ("b", "e"), ("c", "f")]
+        page["connectors"] = [_conn(f"oc{n}", a, b, 100 + n) for n, (a, b) in enumerate(links)]
+    if template == "network":
+        shapes = [
+            ("client", "net.user", 28, 60, "Utilisateur distant"),
+            ("vpn", "net.vpn", 72, 60, "VPN"),
+            ("internet", "net.cloud", 174, 25, "Internet"),
+            ("firewall", "net.firewall", 174, 65, "Pare-feu"),
+            ("balancer", "net.load_balancer", 174, 101, "Équilibreur"),
+            ("app1", "net.vm", 118, 137, "Application 1"),
+            ("app2", "net.vm", 174, 137, "Application 2"),
+            ("db", "net.database", 233, 137, "Données"),
+            ("storage", "net.storage", 233, 178, "Stockage"),
+        ]
+        page["shapes"] = [_shape(i, t, x, y, text, n) for n, (i, t, x, y, text) in enumerate(shapes)]
+        boundary = _shape("subnet", "net.subnet", 174, 155, "Réseau applicatif", -10)
+        boundary.update(w=mm_to_px(228), h=mm_to_px(104))
+        page["shapes"].insert(0, boundary)
+        links = [("client", "vpn"), ("vpn", "firewall"), ("internet", "firewall"),
+                 ("firewall", "balancer"), ("balancer", "app1"), ("balancer", "app2"),
+                 ("app1", "db"), ("app2", "db"), ("db", "storage")]
+        page["connectors"] = [_conn(f"nc{n}", a, b, 100 + n) for n, (a, b) in enumerate(links)]
+        for conn in page["connectors"]:
+            conn["style"].update(route="straight", arrow_end="triangle", line="#356e9f")
+        doc["properties"]["title"] = "Architecture réseau et serveurs"
+    if template == "uml":
+        shapes = [("a", "uml.class", 60, 55, "Client"), ("b", "uml.class", 150, 55, "Commande"),
+                  ("c", "uml.class", 105, 135, "Produit")]
+        page["shapes"] = [_shape(i, t, x, y, text, n) for n, (i, t, x, y, text) in enumerate(shapes)]
+        links = [("a", "b"), ("b", "c")]
+        page["connectors"] = [_conn(f"uc{n}", a, b, 100 + n) for n, (a, b) in enumerate(links)]
+        for conn in page["connectors"]:
+            conn["style"].update(route="straight", arrow_end="triangle")
     if template == "bpmn":
         shapes = [
             ("b1", "bpmn.start", 30, 105, "Début"),
@@ -138,7 +178,7 @@ TEMPLATES = [
     ("flow", "Diagramme de flux de base"),
     ("bpmn", "Diagramme de processus BPMN"),
     ("org", "Organigramme hiérarchique"),
-    ("network", "Diagramme réseau de base"),
+    ("network", "Architecture réseau et serveurs"),
     ("floorplan", "Plan de bureau"),
     ("circuit", "Schéma électrique"),
     ("cff", "Diagramme de flux interfonctionnel"),
@@ -149,9 +189,7 @@ TEMPLATES = [
 
 def preview(template: str) -> dict:
     """Petit diagramme d'illustration pour la vignette du modèle (comme dans Visio)."""
-    if template == "sample":
-        return build("sample")
-    if template in ("bpmn", "floorplan", "circuit"):
+    if template in ("sample", "bpmn", "floorplan", "circuit", "org", "network", "uml"):
         return build(template)
     page = fileformat.default_page("Aperçu")
     if template == "cff":
@@ -175,20 +213,6 @@ def preview(template: str) -> dict:
                   ("c", "flow.decision", 60, 115, "Choix ?"), ("d", "flow.process", 140, 115, "Action"),
                   ("e", "flow.terminator", 60, 160, "Fin")]
         links = [("a", "b"), ("b", "c"), ("c", "d"), ("c", "e")]
-    elif template == "org":
-        shapes = [("a", "org.executive", 105, 30, "Direction"), ("b", "org.manager", 55, 75, "Ventes"),
-                  ("c", "org.manager", 155, 75, "Production"), ("d", "org.employee", 30, 120, ""),
-                  ("e", "org.employee", 80, 120, ""), ("f", "org.employee", 155, 120, "")]
-        links = [("a", "b"), ("a", "c"), ("b", "d"), ("b", "e"), ("c", "f")]
-    elif template == "network":
-        shapes = [("a", "net.cloud", 105, 30, "Internet"), ("b", "net.firewall", 105, 75, ""),
-                  ("c", "net.switch", 105, 110, ""), ("d", "net.server", 45, 155, ""),
-                  ("e", "net.pc", 105, 155, ""), ("f", "net.laptop", 165, 155, "")]
-        links = [("a", "b"), ("b", "c"), ("c", "d"), ("c", "e"), ("c", "f")]
-    elif template == "uml":
-        shapes = [("a", "uml.class", 60, 55, "Client"), ("b", "uml.class", 150, 55, "Commande"),
-                  ("c", "uml.class", 105, 135, "Produit")]
-        links = [("a", "b"), ("b", "c")]
     for n, (sid, t, x, y, txt) in enumerate(shapes):
         page["shapes"].append(_shape(sid, t, x, y, txt, n))
     for n, (a, b) in enumerate(links):
