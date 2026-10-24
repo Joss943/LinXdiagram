@@ -721,6 +721,19 @@ class _Importer:
             if self.count > MAX_SHAPES:
                 raise VsdxError("Trop de formes dans ce document Visio.")
             sheet = self._sheet(elem, parent_master)
+            user_rows = dict(sheet.named_rows("User"))
+            if user_rows.get("LinXDataGraphicSnapshot", {}).get("Value") == "1":
+                # Rattache l'instantané au parent LinXdiagram ; si le parent a été supprimé dans Visio,
+                # l'annotation reste importable comme une forme autonome.
+                source_id = user_rows.get("LinXDataGraphicSource", {}).get("Value", "")
+                source_lxd_id = self.id_map.get(source_id)
+                source = next((s for s in page["shapes"] if s["id"] == source_lxd_id), None)
+                graphic = fileformat.clean_data_graphic({
+                    "field": user_rows.get("LinXDataGraphicField", {}).get("Value", ""),
+                    "display": user_rows.get("LinXDataGraphicDisplay", {}).get("Value", "")})
+                if source is not None and graphic and graphic["field"] in source.get("data", {}):
+                    source["data_graphic"] = graphic
+                    continue
             W = abs(sheet.num("Width", 0.0) or 0.0)
             H = abs(sheet.num("Height", 0.0) or 0.0)
             is_1d = sheet.raw("BeginX") is not None and sheet.raw("EndX") is not None
@@ -812,6 +825,10 @@ class _Importer:
         for key, cells in sheet.named_rows("User"):
             if type_id is None and key == "LinXType" and cells.get("Value") in stencils.SHAPES:
                 type_id = cells["Value"]
+        graphic_field = next((cells.get("Value", "") for key, cells in sheet.named_rows("User")
+                              if key == "LinXDataGraphicField"), "")
+        graphic_display = next((cells.get("Value", "") for key, cells in sheet.named_rows("User")
+                                if key == "LinXDataGraphicDisplay"), "")
         cmds, any_fill, any_line = ([], True, True)
         image = ""
         if elem.get("Type") == "Foreign":
@@ -843,6 +860,9 @@ class _Importer:
               "flip_v": bool(sheet.num("FlipY", 0)), "z": float(self.count), "text": text,
               "style": style, "text_style": self._text_style(sheet), "data": self._data(sheet),
               "link": "", "group": group}
+        data_graphic = fileformat.clean_data_graphic({"field": graphic_field, "display": graphic_display})
+        if data_graphic:
+            st["data_graphic"] = data_graphic
         locks = [sheet.num(n, 0) for n in ("LockMoveX", "LockMoveY", "LockDelete")]
         st["locked"] = all(bool(v) for v in locks)
         tip = sheet.raw("Comment")
@@ -1094,16 +1114,24 @@ def _text_cells(shape_el, ts: dict, fonts: dict) -> None:
     _cell(row, "HorzAlign", {"left": 0, "center": 1, "right": 2}[ts["halign"]])
 
 
-def _data_sections(shape_el, data: dict, link: str, type_id: str | None, container: bool = False) -> None:
-    if type_id:
+def _data_sections(shape_el, data: dict, link: str, type_id: str | None, container: bool = False,
+                   data_graphic: dict | None = None) -> None:
+    if type_id or data_graphic:
         sec = _el(shape_el, "Section", N="User")
-        row = _el(sec, "Row", N="LinXType")
-        _cell(row, "Value", type_id, "STR", _str_formula(type_id))
-        _cell(row, "Prompt", "")
-        if container:  # cadre, couloir ou phase : conteneur Visio
-            row = _el(sec, "Row", N="msvStructureType")
-            _cell(row, "Value", "Container", "STR", _str_formula("Container"))
+        if type_id:
+            row = _el(sec, "Row", N="LinXType")
+            _cell(row, "Value", type_id, "STR", _str_formula(type_id))
             _cell(row, "Prompt", "")
+            if container:  # cadre, couloir ou phase : conteneur Visio
+                row = _el(sec, "Row", N="msvStructureType")
+                _cell(row, "Value", "Container", "STR", _str_formula("Container"))
+                _cell(row, "Prompt", "")
+        if data_graphic:
+            for name, value in (("LinXDataGraphicField", data_graphic.get("field", "")),
+                                ("LinXDataGraphicDisplay", data_graphic.get("display", ""))):
+                row = _el(sec, "Row", N=name)
+                _cell(row, "Value", value, "STR", _str_formula(value))
+                _cell(row, "Prompt", "")
     if data:
         sec = _el(shape_el, "Section", N="Property")
         used = set()
@@ -1125,7 +1153,7 @@ def _data_sections(shape_el, data: dict, link: str, type_id: str | None, contain
         _cell(row, "NewWindow", False)
 
 
-def _data_graphic_snapshot(shapes_el, it, sid: int, page_h: float, fonts: dict,
+def _data_graphic_snapshot(shapes_el, it, sid: int, source_id: int, page_h: float, fonts: dict,
                            layer_index: int | None) -> None:
     """Exporte le graphique comme annotation vectorielle figée, faute de binding Visio natif."""
     from PyQt6.QtCore import QRectF
@@ -1159,6 +1187,18 @@ def _data_graphic_snapshot(shapes_el, it, sid: int, page_h: float, fonts: dict,
     _cell(el, "FillForegndTrans", 0.0)
     if layer_index is not None:
         _cell(el, "LayerMember", str(layer_index), "STR")
+    sec = _el(el, "Section", N="User")
+    row = _el(sec, "Row", N="LinXDataGraphicSnapshot")
+    _cell(row, "Value", "1", "STR", _str_formula("1"))
+    _cell(row, "Prompt", "")
+    row = _el(sec, "Row", N="LinXDataGraphicSource")
+    _cell(row, "Value", str(source_id), "STR", _str_formula(str(source_id)))
+    _cell(row, "Prompt", "")
+    for name, value in (("LinXDataGraphicField", it.data_graphic.get("field", "")),
+                        ("LinXDataGraphicDisplay", it.data_graphic.get("display", ""))):
+        row = _el(sec, "Row", N=name)
+        _cell(row, "Value", value, "STR", _str_formula(value))
+        _cell(row, "Prompt", "")
     _cell(el, "TxtPinX", width / 2)
     _cell(el, "TxtPinY", height / 2)
     _cell(el, "TxtWidth", width)
@@ -1273,7 +1313,8 @@ def _page_xml(scene, images: list[tuple[str, bytes]], fonts: dict) -> tuple[byte
                     _cell(row, "DirX", 0.0)
                     _cell(row, "DirY", 0.0)
                     _cell(row, "Type", 0)
-            _data_sections(el, st["data"], st["link"], st["type"], bool(sdef.cff))
+            _data_sections(el, st["data"], st["link"], st["type"], bool(sdef.cff),
+                           st.get("data_graphic"))
             outline, detail = it.export_paths()
             ix = 0
             if kind == "Foreign":
@@ -1378,7 +1419,7 @@ def _page_xml(scene, images: list[tuple[str, bytes]], fonts: dict) -> tuple[byte
     for it in items:
         if not isinstance(it, ShapeItem) or not it.data_graphic_text():
             continue
-        _data_graphic_snapshot(shapes_el, it, next_id, ph, fonts,
+        _data_graphic_snapshot(shapes_el, it, next_id, ids[it.id], ph, fonts,
                                layer_ids.get(it.layer) if it.layer else None)
         next_id += 1
     if connects:
