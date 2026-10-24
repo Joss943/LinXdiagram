@@ -20,12 +20,14 @@ from __future__ import annotations
 import base64
 import datetime
 import io
+import json
 import math
 import posixpath
 import re
 import zipfile
 import xml.etree.ElementTree as ET
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPainterPath
 
 from . import APP_NAME, __version__, fileformat, security, stencils, swimlanes
@@ -113,6 +115,14 @@ class _Package:
         infos = self.zip.infolist()
         if len(infos) > MAX_MEMBERS:
             raise VsdxError("Paquet Visio anormal (trop de parties).")
+        names = [info.filename for info in infos]
+        if len(set(names)) != len(names):
+            raise VsdxError("Paquet Visio ambigu : noms de parties dupliqués.")
+        for name in names:
+            parts = name.split("/")
+            if (not name or name.startswith(("/", "\\")) or "\\" in name or "\x00" in name
+                    or any(part in (".", "..") for part in parts)):
+                raise VsdxError("Paquet Visio invalide : chemin de partie non autorisé.")
         self.infos = {i.filename: i for i in infos}
         self.total = 0
 
@@ -138,6 +148,8 @@ class _Package:
         data = self.read(name)
         if data is None:
             return None
+        if b"\x00" in data:
+            raise VsdxError(f"XML non UTF-8 refusé dans {name}.")
         if _DTD_RE.search(data):
             raise VsdxError("XML avec DTD refusé (protection contre les attaques XXE).")
         try:
@@ -720,6 +732,22 @@ class _Importer:
             if self.count > MAX_SHAPES:
                 raise VsdxError("Trop de formes dans ce document Visio.")
             sheet = self._sheet(elem, parent_master)
+            user_rows = dict(sheet.named_rows("User"))
+            if user_rows.get("LinXDataGraphicSnapshot", {}).get("Value") == "1":
+                # Rattache l'instantané au parent LinXdiagram ; si le parent a été supprimé dans Visio,
+                # l'annotation reste importable comme une forme autonome.
+                source_id = user_rows.get("LinXDataGraphicSource", {}).get("Value", "")
+                source_lxd_id = self.id_map.get(source_id)
+                source = next((s for s in page["shapes"] if s["id"] == source_lxd_id), None)
+                graphic = _data_graphic_from_rows(user_rows)
+                if source is not None and graphic and graphic["field"] in source.get("data", {}):
+                    current = source.get("data_graphic", {})
+                    if ("status_colors" not in graphic and current.get("field") == graphic["field"]
+                            and current.get("display") == graphic["display"]
+                            and current.get("status_colors")):
+                        graphic["status_colors"] = current["status_colors"]
+                    source["data_graphic"] = graphic
+                    continue
             W = abs(sheet.num("Width", 0.0) or 0.0)
             H = abs(sheet.num("Height", 0.0) or 0.0)
             is_1d = sheet.raw("BeginX") is not None and sheet.raw("EndX") is not None
@@ -807,8 +835,9 @@ class _Importer:
         cx, cy = to_page.map(W / 2, H / 2)
         sid = f"{self.prefix}{elem.get('ID')}"
         self.id_map[elem.get("ID")] = sid
+        user_rows = dict(sheet.named_rows("User"))
         type_id = forced_type
-        for key, cells in sheet.named_rows("User"):
+        for key, cells in user_rows.items():
             if type_id is None and key == "LinXType" and cells.get("Value") in stencils.SHAPES:
                 type_id = cells["Value"]
         cmds, any_fill, any_line = ([], True, True)
@@ -842,6 +871,9 @@ class _Importer:
               "flip_v": bool(sheet.num("FlipY", 0)), "z": float(self.count), "text": text,
               "style": style, "text_style": self._text_style(sheet), "data": self._data(sheet),
               "link": "", "group": group}
+        data_graphic = _data_graphic_from_rows(user_rows)
+        if data_graphic:
+            st["data_graphic"] = data_graphic
         locks = [sheet.num(n, 0) for n in ("LockMoveX", "LockMoveY", "LockDelete")]
         st["locked"] = all(bool(v) for v in locks)
         tip = sheet.raw("Comment")
@@ -1009,6 +1041,21 @@ def _cell(parent, name: str, value, unit: str | None = None, formula: str | None
     return c
 
 
+def _data_graphic_from_rows(rows: dict) -> dict:
+    colors = []
+    raw = rows.get("LinXDataGraphicColors", {}).get("Value", "")
+    if isinstance(raw, str) and len(raw) <= 16_384:
+        try:
+            colors = json.loads(raw)
+        except (TypeError, ValueError):
+            pass
+    return fileformat.clean_data_graphic({
+        "field": rows.get("LinXDataGraphicField", {}).get("Value", ""),
+        "display": rows.get("LinXDataGraphicDisplay", {}).get("Value", ""),
+        "status_colors": colors,
+    })
+
+
 def _str_formula(s: str) -> str:
     return '"' + s.replace('"', '""') + '"'
 
@@ -1093,16 +1140,30 @@ def _text_cells(shape_el, ts: dict, fonts: dict) -> None:
     _cell(row, "HorzAlign", {"left": 0, "center": 1, "right": 2}[ts["halign"]])
 
 
-def _data_sections(shape_el, data: dict, link: str, type_id: str | None, container: bool = False) -> None:
-    if type_id:
+def _data_sections(shape_el, data: dict, link: str, type_id: str | None, container: bool = False,
+                   data_graphic: dict | None = None) -> None:
+    if type_id or data_graphic:
         sec = _el(shape_el, "Section", N="User")
-        row = _el(sec, "Row", N="LinXType")
-        _cell(row, "Value", type_id, "STR", _str_formula(type_id))
-        _cell(row, "Prompt", "")
-        if container:  # cadre, couloir ou phase : conteneur Visio
-            row = _el(sec, "Row", N="msvStructureType")
-            _cell(row, "Value", "Container", "STR", _str_formula("Container"))
+        if type_id:
+            row = _el(sec, "Row", N="LinXType")
+            _cell(row, "Value", type_id, "STR", _str_formula(type_id))
             _cell(row, "Prompt", "")
+            if container:  # cadre, couloir ou phase : conteneur Visio
+                row = _el(sec, "Row", N="msvStructureType")
+                _cell(row, "Value", "Container", "STR", _str_formula("Container"))
+                _cell(row, "Prompt", "")
+        if data_graphic:
+            for name, value in (("LinXDataGraphicField", data_graphic.get("field", "")),
+                                ("LinXDataGraphicDisplay", data_graphic.get("display", ""))):
+                row = _el(sec, "Row", N=name)
+                _cell(row, "Value", value, "STR", _str_formula(value))
+                _cell(row, "Prompt", "")
+            colors = data_graphic.get("status_colors", [])
+            if colors:
+                value = json.dumps(colors, ensure_ascii=False, separators=(",", ":"))
+                row = _el(sec, "Row", N="LinXDataGraphicColors")
+                _cell(row, "Value", value, "STR", _str_formula(value))
+                _cell(row, "Prompt", "")
     if data:
         sec = _el(shape_el, "Section", N="Property")
         used = set()
@@ -1122,6 +1183,80 @@ def _data_sections(shape_el, data: dict, link: str, type_id: str | None, contain
         _cell(row, "Address", link)
         _cell(row, "Description", "")
         _cell(row, "NewWindow", False)
+
+
+def _data_graphic_snapshot(shapes_el, it, sid: int, source_id: int, page_h: float, fonts: dict,
+                           layer_index: int | None) -> None:
+    """Exporte le graphique comme annotation vectorielle figée, faute de binding Visio natif."""
+    from PyQt6.QtCore import QRectF
+    from PyQt6.QtGui import QFont, QFontMetricsF
+
+    text = it.data_graphic_text()
+    if not text:
+        return
+    rect = it.data_graphic_rect(1.0)
+    if rect.isNull():
+        return
+    center = it.mapToScene(rect.center())
+    width, height = rect.width() / PX_PER_INCH, rect.height() / PX_PER_INCH
+    width_px, height_px = rect.width(), rect.height()
+    fill, ink, border = it.data_graphic_palette()
+    el = _el(shapes_el, "Shape", ID=str(sid), NameU=f"Data graphic.{sid}",
+             Name=f"Graphique de données.{sid}", Type="Shape", LineStyle="0",
+             FillStyle="0", TextStyle="0")
+    _cell(el, "PinX", center.x() / PX_PER_INCH)
+    _cell(el, "PinY", page_h - center.y() / PX_PER_INCH)
+    _cell(el, "Width", width)
+    _cell(el, "Height", height)
+    _cell(el, "LocPinX", width / 2, None, "Width*0.5")
+    _cell(el, "LocPinY", height / 2, None, "Height*0.5")
+    _cell(el, "Angle", -math.radians(it.rotation()))
+    _cell(el, "LineWeight", 0.6, "PT")
+    _cell(el, "LineColor", border)
+    _cell(el, "LinePattern", 1)
+    _cell(el, "FillForegnd", fill)
+    _cell(el, "FillPattern", 1)
+    _cell(el, "FillForegndTrans", 0.0)
+    if layer_index is not None:
+        _cell(el, "LayerMember", str(layer_index), "STR")
+    sec = _el(el, "Section", N="User")
+    row = _el(sec, "Row", N="LinXDataGraphicSnapshot")
+    _cell(row, "Value", "1", "STR", _str_formula("1"))
+    _cell(row, "Prompt", "")
+    row = _el(sec, "Row", N="LinXDataGraphicSource")
+    _cell(row, "Value", str(source_id), "STR", _str_formula(str(source_id)))
+    _cell(row, "Prompt", "")
+    for name, value in (("LinXDataGraphicField", it.data_graphic.get("field", "")),
+                        ("LinXDataGraphicDisplay", it.data_graphic.get("display", ""))):
+        row = _el(sec, "Row", N=name)
+        _cell(row, "Value", value, "STR", _str_formula(value))
+        _cell(row, "Prompt", "")
+    colors = it.data_graphic.get("status_colors", [])
+    if colors:
+        value = json.dumps(colors, ensure_ascii=False, separators=(",", ":"))
+        row = _el(sec, "Row", N="LinXDataGraphicColors")
+        _cell(row, "Value", value, "STR", _str_formula(value))
+        _cell(row, "Prompt", "")
+    _cell(el, "TxtPinX", width / 2)
+    _cell(el, "TxtPinY", height / 2)
+    _cell(el, "TxtWidth", width)
+    _cell(el, "TxtHeight", height)
+    _cell(el, "TxtLocPinX", width / 2)
+    _cell(el, "TxtLocPinY", height / 2)
+    margin = 8.0 / PX_PER_INCH
+    for name in ("LeftMargin", "RightMargin"):
+        _cell(el, name, margin)
+    font = QFont("Arial")
+    font.setPixelSize(11)
+    shown = QFontMetricsF(font).elidedText(text, Qt.TextElideMode.ElideRight,
+                                          max(1.0, width_px - 16.0))
+    _text_cells(el, {"font": "Arial", "color": ink, "size": 8.25, "bold": False,
+                     "italic": False, "underline": False, "valign": "middle", "halign": "left"}, fonts)
+    path = QPainterPath()
+    path.addRoundedRect(QRectF(0.0, 0.0, width_px, height_px), 5.0, 5.0)
+    for sub in _path_subpaths(path, width_px, height_px):
+        _geometry_section(el, 0, sub, False, False)
+    _el(el, "Text").text = _xml_text(shown)
 
 
 def _relationships(members: list[str], containers: list[str], ids: dict[str, int]) -> str:
@@ -1216,7 +1351,8 @@ def _page_xml(scene, images: list[tuple[str, bytes]], fonts: dict) -> tuple[byte
                     _cell(row, "DirX", 0.0)
                     _cell(row, "DirY", 0.0)
                     _cell(row, "Type", 0)
-            _data_sections(el, st["data"], st["link"], st["type"], bool(sdef.cff))
+            _data_sections(el, st["data"], st["link"], st["type"], bool(sdef.cff),
+                           st.get("data_graphic"))
             outline, detail = it.export_paths()
             ix = 0
             if kind == "Foreign":
@@ -1315,6 +1451,15 @@ def _page_xml(scene, images: list[tuple[str, bytes]], fonts: dict) -> tuple[byte
             for which, part, from_part in (("src", "BeginX", 9), ("dst", "EndX", 12)):
                 if glue[which] is not None:
                     connects.append((sid, part, from_part, glue[which]))
+    # Visio n'a pas de ShapeSheet standard pour conserver l'association LinXdiagram :
+    # on ajoute un instantané vectoriel déplaçable séparément, qui reprend l'aspect visible.
+    next_id = len(ids) + 1
+    for it in items:
+        if not isinstance(it, ShapeItem) or not it.data_graphic_text():
+            continue
+        _data_graphic_snapshot(shapes_el, it, next_id, ids[it.id], ph, fonts,
+                               layer_ids.get(it.layer) if it.layer else None)
+        next_id += 1
     if connects:
         con_el = _el(root, "Connects")
         for sid, part, from_part, target in connects:
@@ -1335,6 +1480,13 @@ def _rels_xml(rels: list[tuple[str, str, str]]) -> bytes:
 
 def export_vsdx(document, path: str) -> None:
     """Écrit le document au format Visio .vsdx (écriture atomique)."""
+    from .items import ShapeItem
+
+    base_shape_count = sum(len(scene.all_items()) for scene in document.pages)
+    graphic_count = sum(1 for scene in document.pages for it in scene.shapes()
+                        if isinstance(it, ShapeItem) and it.data_graphic_text())
+    if base_shape_count + graphic_count > MAX_SHAPES:
+        raise VsdxError("L'export des graphiques de données dépasserait la limite de formes VSDX.")
     fonts: dict[str, int] = {}
     images: list[tuple[str, bytes]] = []
     page_parts = []

@@ -15,7 +15,10 @@ import binascii
 import hashlib
 import json
 import math
+import ntpath
+import os
 import re
+import unicodedata
 from typing import Callable
 
 from . import FILE_EXT, __version__, APP_NAME
@@ -34,6 +37,7 @@ MAX_ITEMS_PER_PAGE = 50_000
 MAX_ITEMS_TOTAL = 200_000
 MAX_TEXT = 20_000
 MAX_DATA_FIELDS = 100
+MAX_DATA_LINKS_PER_SHAPE = 10
 MAX_IMAGE_BYTES = 16 * 1024 * 1024
 MAX_PATH_COMMANDS = 20_000
 
@@ -209,6 +213,110 @@ def clean_link(raw) -> str:
     return security.safe_url(raw) or "" if isinstance(raw, str) else ""
 
 
+def clean_data_link(raw) -> dict:
+    """Métadonnées de liaison vers un fichier local, sans accès réseau automatique."""
+    raw = _dict(raw)
+    path = raw.get("path")
+    if (not isinstance(path, str) or not path or len(path) > 2048 or "\x00" in path
+            or not (os.path.isabs(path) or ntpath.isabs(path)) or path.startswith(("//", "\\\\"))):
+        return {}
+    source_key = _line(raw.get("source_key"), 100)
+    shape_key = _line(raw.get("shape_key"), 100)
+    if not source_key or not shape_key:
+        return {}
+    field_map: dict[str, str] = {}
+    targets: set[str] = set()
+    raw_map = raw.get("field_map")
+    if isinstance(raw_map, dict):
+        for index, (source, target) in enumerate(raw_map.items()):
+            if index >= MAX_DATA_FIELDS:
+                break
+            source = _line(source, 100)
+            target = _line(target, 100)
+            if source and target and source not in field_map and target not in targets:
+                field_map[source] = target
+                targets.add(target)
+    else:
+        source_fields = raw.get("fields")
+        if isinstance(source_fields, list):
+            for field in source_fields[:MAX_DATA_FIELDS]:
+                field = _line(field, 100)
+                if field and field not in field_map:
+                    field_map[field] = field
+                    targets.add(field)
+    if source_key not in field_map:
+        if len(field_map) >= MAX_DATA_FIELDS:
+            return {}
+        target = source_key
+        if target in targets:
+            return {}
+        field_map[source_key] = target
+        targets.add(target)
+    fields = list(field_map.values())
+    return {"path": path, "source_key": source_key, "shape_key": shape_key,
+            "fields": fields, "field_map": field_map}
+
+
+def clean_data_links(raw, legacy=None) -> list[dict]:
+    """Charge plusieurs sources locales et migre l'ancien lien unique si nécessaire."""
+    candidates = raw[:MAX_DATA_LINKS_PER_SHAPE] if isinstance(raw, list) else []
+    if isinstance(legacy, dict):
+        candidates.append(legacy)
+    out, seen, used_fields = [], set(), set()
+    for candidate in candidates:
+        link = clean_data_link(candidate)
+        if not link:
+            continue
+        key = (os.path.normcase(link["path"]), link["source_key"], link["shape_key"])
+        if key in seen:
+            continue
+        mapping = {}
+        entries = sorted(link["field_map"].items(), key=lambda pair: pair[0] != link["source_key"])
+        for source, target in entries:
+            if target not in used_fields and len(used_fields) + len(mapping) < MAX_DATA_FIELDS:
+                mapping[source] = target
+        if link["source_key"] not in mapping:
+            continue
+        link["field_map"] = mapping
+        link["fields"] = list(mapping.values())
+        seen.add(key)
+        used_fields.update(mapping.values())
+        out.append(link)
+        if len(out) >= MAX_DATA_LINKS_PER_SHAPE:
+            break
+    return out
+
+
+def normalize_status_key(value: str) -> str:
+    """Compare les libellés de statut sans tenir compte de la casse ou des accents."""
+    normalized = unicodedata.normalize("NFKD", str(value)).casefold().strip()
+    return "".join(char for char in normalized if not unicodedata.combining(char))
+
+
+def clean_data_graphic(raw) -> dict:
+    """Liaison d'une pastille visible à une propriété de forme."""
+    raw = _dict(raw)
+    field = _line(raw.get("field"), 100)
+    display = raw.get("display", "label_value")
+    if not field or not isinstance(display, str) or display not in {"label_value", "value", "status"}:
+        return {}
+    out = {"field": field, "display": display}
+    if display == "status" and isinstance(raw.get("status_colors"), list):
+        colors, seen = [], set()
+        for rule in raw["status_colors"][:50]:
+            rule = _dict(rule)
+            value = _line(rule.get("value"), 200)
+            key = normalize_status_key(value)
+            color = _color(rule.get("color"), "", allow_none=False)
+            if not key or key in seen or not color:
+                continue
+            seen.add(key)
+            colors.append({"value": value, "color": color})
+        if colors:
+            out["status_colors"] = colors
+    return out
+
+
 def clean_image(raw) -> str:
     if not isinstance(raw, str) or not raw:
         return ""
@@ -275,6 +383,12 @@ def clean_shape(raw, theme: str) -> dict | None:
         "comments": clean_comments(raw.get("comments")),
         "layer": _line(raw.get("layer"), 64),
     }
+    data_links = clean_data_links(raw.get("data_links"), raw.get("data_link"))
+    if data_links:
+        shape["data_links"] = data_links
+    data_graphic = clean_data_graphic(raw.get("data_graphic"))
+    if data_graphic:
+        shape["data_graphic"] = data_graphic
     if stencils.get(type_id).cff and isinstance(raw.get("cff"), dict):
         opts = {k: _bool(raw["cff"].get(k), d) for k, d in (("title", True), ("hidden", False),
                                                             ("rotate", False)) if k in raw["cff"]}

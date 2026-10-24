@@ -8,6 +8,7 @@ import csv
 import io
 import math
 import os
+import unicodedata
 
 from PyQt6.QtCore import (QBuffer, QIODevice, QMimeData, QPoint, QPointF, QRectF, QSize, Qt, QTimer,
                           QUrl)
@@ -23,13 +24,13 @@ from . import (APP_NAME, __version__, FILE_EXT, datavis, export, fileformat, ico
 from .backstage import Backstage
 from .canvas import CanvasArea
 from .commands import DocSettingsCommand, PageCommand
-from .dialogs import (DataImportDialog, FindReplaceDialog, ImageExportDialog, LayersDialog,
-                      OptionsDialog, PageSetupDialog, PasswordDialog, PropertiesDialog,
+from .dialogs import (DataGraphicDialog, DataImportDialog, DataLinkDialog, FindReplaceDialog,
+                      ImageExportDialog, LayersDialog, OptionsDialog, PageSetupDialog, PasswordDialog, PropertiesDialog,
                       ShapeSheetDialog, ShortcutsDialog, ZoomDialog)
 from .document import Document
 from .items import ConnectorItem, ShapeItem, decode_image
-from .panes import (CommentsPane, FormatPane, IssuesPane, PanZoomPane, ShapeDataPane, ShapesPane,
-                    SizePositionPane, TaskPaneArea)
+from .panes import (CommentsPane, DrawingExplorerPane, FormatPane, IssuesPane, PanZoomPane,
+                    ShapeDataPane, ShapesPane, SizePositionPane, TaskPaneArea)
 from .presentation import PresentationView
 from .ribbon import ICON, SMALL, Ribbon, RibbonButton, RibbonGallery, RibbonGroup
 from .style import T
@@ -51,7 +52,74 @@ BACKGROUNDS = (("#ffffff", "Blanc"), ("#f3f2f1", "Gris clair"), ("#eaf1fb", "Ble
 BORDERS = (("simple", "Simple"), ("band", "Bandeau"), ("frame", "Cadre technique"), ("modern", "Moderne"))
 PANES = (("format", "Format de la forme", "format_panel"), ("size", "Taille et position", "size_position"),
          ("data", "Données de forme", "shape_data"), ("comments", "Commentaires", "comments"),
-         ("issues", "Problèmes", "check_diagram"), ("panzoom", "Panoramique et zoom", "pan_zoom"))
+         ("issues", "Problèmes", "check_diagram"), ("panzoom", "Panoramique et zoom", "pan_zoom"),
+         ("drawing", "Explorateur de dessin", "layers"))
+
+
+def _clean_data_headers(headers: list[str]) -> list[str]:
+    if not headers or len(headers) > fileformat.MAX_DATA_FIELDS:
+        raise datavis.DataError(f"Le CSV doit contenir entre 1 et {fileformat.MAX_DATA_FIELDS} colonnes.")
+    clean = [security.clean_line(h, 100) for h in headers]
+    if any(not h for h in clean) or len(set(clean)) != len(clean):
+        raise datavis.DataError("Pour lier les données, chaque colonne CSV doit avoir un nom unique de 100 caractères maximum.")
+    return clean
+
+
+def _csv_safe_cell(value: str) -> str:
+    """Neutralise les cellules texte actives dans Excel/LibreOffice sans casser les lignes CSV."""
+    value = str(value)
+    index = 0
+    while index < len(value) and (value[index].isspace() or value[index] == "\ufeff"
+                                  or unicodedata.category(value[index]) == "Cf"):
+        index += 1
+    return "'" + value if value[index:index + 1] in ("=", "+", "-", "@") else value
+
+
+def _merge_linked_data(existing: dict, old_fields: list[str], headers: list[str], row: list[str],
+                       field_map: dict[str, str] | None = None) -> tuple[dict, int]:
+    field_map = field_map or {header: header for header in headers}
+    incoming = {field_map[header]: row[i] if i < len(row) else ""
+                for i, header in enumerate(headers) if header in field_map}
+    old = set(old_fields)
+    manual = [(key, value) for key, value in existing.items() if key not in old and key not in incoming]
+    room = max(0, fileformat.MAX_DATA_FIELDS - len(incoming))
+    kept = manual[:room]
+    # Les champs du CSV ont priorité, les propriétés manuelles restantes sont conservées si possible.
+    return {**incoming, **dict(kept)}, len(manual) - len(kept)
+
+
+def _data_link_identity(link: dict) -> tuple[str, str, str]:
+    return os.path.normcase(os.path.normpath(link.get("path", ""))), link.get("source_key", ""), \
+        link.get("shape_key", "")
+
+
+def _data_link_field_map(shape: ShapeItem, path: str, headers: list[str], old_link: dict | None,
+                        existing_data: dict | None = None, source_key: str = "") -> dict[str, str]:
+    """Donne aux colonnes CSV un nom unique sans écraser les données d'autres sources."""
+    old_link = old_link or {}
+    old_fields = set(old_link.get("fields", []))
+    reserved = set(shape.data if existing_data is None else existing_data) - old_fields
+    old_map = old_link.get("field_map", {})
+    stem = os.path.splitext(os.path.basename(path))[0] or "CSV"
+    out: dict[str, str] = {}
+    limit = max(0, fileformat.MAX_DATA_FIELDS - len(reserved))
+    selected = list(headers[:limit])
+    source_key = old_link.get("source_key", source_key)
+    if source_key in headers and source_key not in selected and limit:
+        selected[-1] = source_key
+    for header in selected:
+        target = old_map.get(header)
+        if not target or target in reserved:
+            base = header if header not in reserved else security.clean_line(f"{stem} · {header}", 100)
+            target = base or "Donnée CSV"
+            suffix_index = 2
+            while target in reserved:
+                suffix = f" ({suffix_index})"
+                target = security.clean_line(base[:100 - len(suffix)] + suffix, 100)
+                suffix_index += 1
+        out[header] = target
+        reserved.add(target)
+    return out
 
 
 class MainWindow(QMainWindow):
@@ -129,6 +197,11 @@ class MainWindow(QMainWindow):
         self.a[key] = a
         return a
 
+    def _plain_message(self, icon: QMessageBox.Icon, title: str, text: str) -> None:
+        box = QMessageBox(icon, title, str(text), QMessageBox.StandardButton.Ok, self)
+        box.setTextFormat(Qt.TextFormat.PlainText)
+        box.exec()
+
     def _sc(self, fn):
         """Exécute fn(scène) s'il y a une page affichée."""
         def run():
@@ -182,6 +255,7 @@ class MainWindow(QMainWindow):
                 ("text", "Texte", "tool_text", "Ctrl+2", "Cliquez sur la page pour écrire du texte."),
                 ("connector", "Connecteur", "connector", "Ctrl+3", "Faites glisser d'une forme à une autre."),
                 ("line", "Ligne", "line", "Ctrl+6", "Tracer un trait."),
+                ("pen", "Stylo", "pen_tool", "Ctrl+7", "Tracer un dessin à main levée."),
                 ("rectangle", "Rectangle", "rect_tool", "Ctrl+8", "Dessiner un rectangle."),
                 ("ellipse", "Ellipse", "ellipse_tool", "Ctrl+9", "Dessiner une ellipse.")):
             act = A(f"tool_{key}", text, ic, sc, None, checkable=True, tip=tip,
@@ -261,6 +335,16 @@ class MainWindow(QMainWindow):
           lambda: self.create_from_data("org"))
         A("data_flow", "Diagramme de flux à partir de données…", "data_visualizer", None,
           lambda: self.create_from_data("flow"))
+        A("data_link", "Lier les formes à un fichier CSV…", "data_visualizer", None,
+          self.link_data, tip="Ajoute une source CSV locale sans écraser les autres liens.")
+        A("data_refresh", "Actualiser les données liées", "data_visualizer", None,
+          self.refresh_linked_data, tip="Relit les fichiers CSV locaux associés aux formes.")
+        A("data_unlink", "Dissocier la sélection", "data_visualizer", None,
+          self.unlink_data, tip="Retire le lien CSV et conserve les données déjà importées.")
+        A("data_graphic", "Configurer un graphique de données…", "data_visualizer", None,
+          self.set_data_graphic, tip="Affiche une propriété et personnalise les règles de couleur des statuts.")
+        A("data_graphic_clear", "Supprimer le graphique de données", "data_visualizer", None,
+          self.clear_data_graphic)
         A("shape_report", "Rapports de forme…", "shape_report", None, self.shape_report,
           tip="Exporte la liste des formes et de leurs données (CSV).")
         A("subprocess", "Créer à partir de la sélection", "subprocess", None, self.create_subprocess,
@@ -354,6 +438,7 @@ class MainWindow(QMainWindow):
         self.ribbon = Ribbon()
         self.ribbon.fileRequested.connect(lambda: self.show_backstage("home"))
         el.addWidget(self.ribbon)
+        self.ribbon.set_collapsed(self.settings.value("layout/ribbon_collapsed", False, type=bool))
         if self.native_frame:
             from .titlebar import CommandSearch
             self.search_box = CommandSearch(self)
@@ -367,6 +452,7 @@ class MainWindow(QMainWindow):
         self.shapes_panel = ShapesPane()
         self.shapes_panel.shapeActivated.connect(self._add_at_center)
         self.shapes_panel.quickShapeChanged.connect(lambda t: setattr(self.doc, "quick_shape", t))
+        self.shapes_panel.closed.connect(lambda: self.a["show_shapes"].setChecked(False))
         self.shapes_panel.categoriesChanged.connect(lambda: QTimer.singleShot(0, self._update_cff_tab))
         center = QWidget()
         cl = QVBoxLayout(center)
@@ -386,8 +472,10 @@ class MainWindow(QMainWindow):
         self.comments_pane = CommentsPane(self)
         self.issues_pane = IssuesPane(self)
         self.panzoom_pane = PanZoomPane(self)
+        self.drawing_pane = DrawingExplorerPane(self)
         for (key, title, _ic), body in zip(PANES, (self.format_pane, self.size_pane, self.data_pane,
-                                                  self.comments_pane, self.issues_pane, self.panzoom_pane)):
+                                                  self.comments_pane, self.issues_pane, self.panzoom_pane,
+                                                  self.drawing_pane)):
             self.task_panes.add(key, title, body)
         self.task_panes.visibilityChanged.connect(self._pane_visibility)
         self.task_panes.setMinimumWidth(280)
@@ -396,6 +484,9 @@ class MainWindow(QMainWindow):
         self.splitter.addWidget(self.task_panes)
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setSizes([250, 900, 300])
+        splitter_state = self.settings.value("layout/editor_splitter")
+        if splitter_state:
+            self.splitter.restoreState(splitter_state)
         el.addWidget(self.splitter, 1)
         self.backstage = Backstage(self)
         self.backstage.back.connect(self.hide_backstage)
@@ -415,7 +506,7 @@ class MainWindow(QMainWindow):
         bar = QWidget()
         bar.setObjectName("PageBar")
         bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        bar.setFixedHeight(28)
+        bar.setFixedHeight(32)
         bl = QHBoxLayout(bar)
         bl.setContentsMargins(4, 0, 4, 0)
         bl.setSpacing(0)
@@ -534,7 +625,7 @@ class MainWindow(QMainWindow):
 
         g = RibbonGroup("Outils")
         g.large(a["tool_select"])
-        draw_menu = self._menu(a["tool_rectangle"], a["tool_ellipse"], a["tool_line"])
+        draw_menu = self._menu(a["tool_rectangle"], a["tool_ellipse"], a["tool_line"], a["tool_pen"])
         g.column(a["tool_connector"], a["tool_text"],
                  R(None, SMALL, text="Outils de dessin", icon_name="drawing_tools", menu=draw_menu))
         home.addWidget(g)
@@ -699,6 +790,14 @@ class MainWindow(QMainWindow):
                 tooltip="<b>Créer à partir de données</b><br>Génère un organigramme ou un diagramme de flux "
                         "à partir d'un fichier CSV.")
         data.addWidget(g)
+        g = RibbonGroup("Données liées")
+        g.large(a["data_link"])
+        g.large(a["data_refresh"])
+        g.large(a["data_unlink"])
+        data.addWidget(g)
+        g = RibbonGroup("Graphiques de données")
+        g.large(a["data_graphic"], menu=self._menu(a["data_graphic_clear"]))
+        data.addWidget(g)
         g = RibbonGroup("Afficher/Masquer")
         g.column(self._check(a["pane_data"], "Fenêtre Données de forme"))
         data.addWidget(g)
@@ -771,6 +870,9 @@ class MainWindow(QMainWindow):
         view = self.ribbon.add_page("Affichage")
         g = RibbonGroup("Affichages")
         g.large(a["presentation"])
+        view.addWidget(g)
+        g = RibbonGroup("Explorateur")
+        g.large(a["pane_drawing"])
         view.addWidget(g)
         g = RibbonGroup("Afficher")
         g.column(self._check(a["rulers"]), self._check(a["grid"]))
@@ -1045,6 +1147,7 @@ class MainWindow(QMainWindow):
         if scene not in self.doc.pages:
             return
         self.view.show_scene(scene)
+        self.drawing_pane.refresh()
         idx = self.doc.pages.index(scene)
         if self.page_tabs.currentIndex() != idx:
             self.page_tabs.blockSignals(True)
@@ -1202,6 +1305,11 @@ class MainWindow(QMainWindow):
         for key in ("shapesheet", "link", "screentip", "new_comment"):
             self.a[key].setEnabled(isinstance(single, ShapeItem))
         self.a["subprocess"].setEnabled(bool(shapes))
+        self.a["data_unlink"].setEnabled(any(s.data_links for s in shapes))
+        editable_shapes = [s for s in shapes if not s.locked]
+        common_fields = set.intersection(*(set(s.data) for s in editable_shapes)) if editable_shapes else set()
+        self.a["data_graphic"].setEnabled(bool(common_fields))
+        self.a["data_graphic_clear"].setEnabled(any(s.data_graphic for s in editable_shapes))
         self.a["open_link"].setEnabled(isinstance(single, ShapeItem) and bool(single.link))
         self.a["delete_comment"].setEnabled(isinstance(single, ShapeItem) and bool(single.comments))
         self._updating_ui = True
@@ -1226,6 +1334,8 @@ class MainWindow(QMainWindow):
         for pane in (self.format_pane, self.size_pane, self.data_pane, self.comments_pane):
             if pane.isVisible():
                 pane.refresh()
+        if self.task_panes.is_visible("drawing"):
+            self.drawing_pane.sync_selection()
         self._update_status()
 
     def _update_status(self) -> None:
@@ -1257,7 +1367,8 @@ class MainWindow(QMainWindow):
         act.blockSignals(False)
         self.settings.setValue(f"panes/{key}", on)
         pane = {"format": self.format_pane, "size": self.size_pane, "data": self.data_pane,
-                "comments": self.comments_pane, "panzoom": self.panzoom_pane}.get(key)
+                "comments": self.comments_pane, "panzoom": self.panzoom_pane,
+                "drawing": self.drawing_pane}.get(key)
         if on and pane is not None:
             pane.refresh()
 
@@ -1296,7 +1407,7 @@ class MainWindow(QMainWindow):
             try:
                 sc.paste(bytes(md.data(CLIP_MIME)), QPointF(off, off))
             except fileformat.DocumentError as exc:
-                QMessageBox.warning(self, APP_NAME, str(exc))
+                self._plain_message(QMessageBox.Icon.Warning, APP_NAME, str(exc))
             return
         if md.hasImage():
             img = md.imageData()
@@ -1661,7 +1772,7 @@ class MainWindow(QMainWindow):
             name = self.doc.unique_page_name("Données")
             page = datavis.build_page(dlg.kind.currentData(), headers, rows, name, self.doc.settings["theme"])
         except (security.SecurityError, datavis.DataError, fileformat.DocumentError) as exc:
-            QMessageBox.warning(self, "Créer à partir de données", str(exc))
+            self._plain_message(QMessageBox.Icon.Warning, "Créer à partir de données", str(exc))
             return
         sc = self.scene()
         if dlg.new_page.isChecked() or sc.all_items():
@@ -1680,6 +1791,294 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{len(page['shapes'])} formes créées à partir de {os.path.basename(path)}.",
                                      6000)
 
+    def link_data(self) -> None:
+        sc = self.scene()
+        if sc is None:
+            return
+        selected = sc.selected_all()
+        candidates = [it for it in (sc.selected_shapes() if selected else sc.shapes()) if not it.locked]
+        if not candidates:
+            QMessageBox.information(self, "Lier les données", "Aucune forme modifiable sur cette page.")
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Choisir un fichier de données local", self._last_dir(),
+                                              "Fichiers CSV (*.csv *.txt)")
+        if not path:
+            return
+        if path.startswith(("//", "\\\\")):
+            QMessageBox.warning(self, "Lier les données", "Choisissez un fichier enregistré sur cet ordinateur.")
+            return
+        try:
+            headers, rows = datavis.parse_csv(security.read_file_limited(path, 5 * 1024 * 1024))
+            headers = _clean_data_headers(headers)
+        except (security.SecurityError, datavis.DataError) as exc:
+            self._plain_message(QMessageBox.Icon.Warning, "Lier les données", str(exc))
+            return
+        dlg = DataLinkDialog(headers, rows, candidates, self)
+        if dlg.exec() != DataLinkDialog.DialogCode.Accepted:
+            return
+        source_key, shape_key = dlg.mapping()
+        source_index = headers.index(source_key)
+        row_by_key: dict[str, list[str]] = {}
+        duplicate = False
+        for row in rows:
+            value = row[source_index].strip() if source_index < len(row) else ""
+            if value:
+                if value in row_by_key:
+                    duplicate = True
+                    break
+                row_by_key[value] = row
+        if duplicate:
+            self._plain_message(QMessageBox.Icon.Warning, "Lier les données",
+                                f"La colonne « {source_key} » contient des clés en double.")
+            return
+
+        def shape_value(shape):
+            return shape.text.strip() if shape_key == "__text__" else str(shape.data.get(shape_key, "")).strip()
+
+        matched = [shape for shape in candidates if shape_value(shape) in row_by_key and shape_value(shape)]
+        if not matched:
+            QMessageBox.information(self, "Lier les données", "Aucune forme ne correspond à cette clé.")
+            return
+        link_path = os.path.abspath(path)
+        identity = (os.path.normcase(os.path.normpath(link_path)), source_key, shape_key)
+        omitted = 0
+        skipped_sources = skipped_capacity = 0
+        skipped_fields = 0
+        updates: dict[str, tuple[dict, list[dict]]] = {}
+        for shape in matched:
+            links = [dict(link, fields=list(link.get("fields", [])),
+                          field_map=dict(link.get("field_map", {}))) for link in shape.data_links]
+            old_index = next((i for i, link in enumerate(links)
+                              if _data_link_identity(link) == identity), None)
+            old_link = links[old_index] if old_index is not None else None
+            if old_link is None and len(links) >= fileformat.MAX_DATA_LINKS_PER_SHAPE:
+                skipped_sources += 1
+                continue
+            field_map = _data_link_field_map(shape, link_path, headers, old_link, source_key=source_key)
+            if not field_map:
+                skipped_capacity += 1
+                continue
+            skipped_fields += len(headers) - len(field_map)
+            linked_fields = list(field_map.values())
+            row = row_by_key[shape_value(shape)]
+            data, removed = _merge_linked_data(shape.data, old_link.get("fields", []) if old_link else [],
+                                               headers, row, field_map)
+            omitted += removed
+            link = {"path": link_path, "source_key": source_key, "shape_key": shape_key,
+                    "fields": linked_fields, "field_map": field_map}
+            if old_index is None:
+                links.append(link)
+            else:
+                links[old_index] = link
+            updates[shape.id] = (data, links)
+
+        if not updates:
+            reason = (f"Limite de {fileformat.MAX_DATA_LINKS_PER_SHAPE} sources CSV par forme atteinte."
+                      if skipped_sources else
+                      f"Limite de {fileformat.MAX_DATA_FIELDS} propriétés de données par forme atteinte.")
+            QMessageBox.information(self, "Lier les données", reason)
+            return
+
+        def update(_it, state):
+            state["data"], state["data_links"] = updates[_it.id]
+        sc.modify([shape for shape in matched if shape.id in updates], update, "Lier les données CSV")
+        self.show_pane("data")
+        msg = f"{len(updates)} forme(s) liée(s) à {os.path.basename(path)}."
+        if skipped_sources:
+            msg += f" {skipped_sources} forme(s) ignorée(s), limite de {fileformat.MAX_DATA_LINKS_PER_SHAPE} sources par forme."
+        if skipped_capacity:
+            msg += f" {skipped_capacity} forme(s) ignorée(s), limite de {fileformat.MAX_DATA_FIELDS} propriétés de données par forme."
+        if skipped_fields:
+            msg += f" {skipped_fields} colonne(s) CSV ignorée(s), limite de {fileformat.MAX_DATA_FIELDS} données par forme."
+        if omitted:
+            msg += f" {omitted} propriété(s) manuelle(s) retirée(s), limite de {fileformat.MAX_DATA_FIELDS} champs par forme."
+        self.statusBar().showMessage(msg, 8000)
+
+    def refresh_linked_data(self) -> None:
+        groups: dict[tuple[str, str, str], list[tuple[object, ShapeItem, dict]]] = {}
+        for page in self.doc.pages:
+            for shape in page.shapes():
+                for link in shape.data_links:
+                    key = (link.get("path", ""), link.get("source_key", ""), link.get("shape_key", ""))
+                    groups.setdefault(key, []).append((page, shape, link))
+        if not groups:
+            QMessageBox.information(self, "Actualiser les données", "Aucune forme n'est liée à un fichier CSV.")
+            return
+
+        parsed: dict[str, tuple[list[str], list[list[str]]]] = {}
+        errors: list[str] = []
+        updates_by_page: dict[object, dict[str, tuple[dict, list[dict]]]] = {}
+        working: dict[tuple[object, str], tuple[dict, list[dict]]] = {}
+        updated_shapes: set[tuple[object, str]] = set()
+        unmatched = omitted = skipped_fields = 0
+        for (path, source_key, shape_key), entries in groups.items():
+            if path not in parsed:
+                try:
+                    headers, rows = datavis.parse_csv(security.read_file_limited(path, 5 * 1024 * 1024))
+                    parsed[path] = (_clean_data_headers(headers), rows)
+                except (OSError, security.SecurityError, datavis.DataError) as exc:
+                    errors.append(f"{os.path.basename(path) or path} : {exc}")
+                    parsed[path] = ([], [])
+            headers, rows = parsed[path]
+            if not headers:
+                continue
+            if source_key not in headers:
+                errors.append(f"{os.path.basename(path)} : colonne « {source_key} » introuvable.")
+                continue
+            source_index = headers.index(source_key)
+            row_by_key: dict[str, list[str]] = {}
+            duplicate = False
+            for row in rows:
+                value = row[source_index].strip() if source_index < len(row) else ""
+                if not value:
+                    continue
+                if value in row_by_key:
+                    duplicate = True
+                    break
+                row_by_key[value] = row
+            if duplicate:
+                errors.append(f"{os.path.basename(path)} : la colonne « {source_key} » contient des clés en double.")
+                continue
+            for page, shape, original_link in entries:
+                token = (page, shape.id)
+                current_data, current_links = working.get(token, (shape.data, shape.data_links))
+                value = shape.text.strip() if shape_key == "__text__" else str(current_data.get(shape_key, "")).strip()
+                row = row_by_key.get(value) if value else None
+                if row is None:
+                    unmatched += 1
+                    continue
+                links = [dict(link, fields=list(link.get("fields", [])),
+                              field_map=dict(link.get("field_map", {}))) for link in current_links]
+                identity = _data_link_identity(original_link)
+                link_index = next((i for i, link in enumerate(links)
+                                   if _data_link_identity(link) == identity), None)
+                if link_index is None:
+                    errors.append(f"{os.path.basename(path)} : liaison devenue indisponible pour une forme.")
+                    continue
+                old_link = links[link_index]
+                field_map = _data_link_field_map(shape, path, headers, old_link, current_data)
+                if not field_map:
+                    errors.append(f"{os.path.basename(path)} : aucune colonne disponible pour actualiser une forme.")
+                    continue
+                skipped_fields += len(headers) - len(field_map)
+                data, removed = _merge_linked_data(current_data, old_link.get("fields", []), headers, row,
+                                                   field_map)
+                links[link_index] = dict(old_link, fields=list(field_map.values()), field_map=field_map)
+                working[token] = (data, links)
+                updated_shapes.add(token)
+                omitted += removed
+
+        for (page, shape_id), values in working.items():
+            updates_by_page.setdefault(page, {})[shape_id] = values
+        if updates_by_page:
+            self.doc.undo_stack.beginMacro("Actualiser les données liées")
+            for page, updates in updates_by_page.items():
+                def update(_it, state, values=updates):
+                    state["data"], state["data_links"] = values[_it.id]
+                page.modify([page.item_by_id(item_id) for item_id in updates], update,
+                            "Actualiser les données CSV")
+            self.doc.undo_stack.endMacro()
+        msg = f"{len(updated_shapes)} forme(s) actualisée(s)."
+        if unmatched:
+            msg += f" {unmatched} forme(s) sans ligne correspondante ont gardé leurs anciennes données."
+        if omitted:
+            msg += f" {omitted} propriété(s) manuelle(s) retirée(s) pour respecter la limite de champs."
+        if skipped_fields:
+            msg += f" {skipped_fields} colonne(s) CSV ignorée(s), limite de {fileformat.MAX_DATA_FIELDS} données par forme."
+        if errors:
+            msg += "\n\n" + "\n".join(dict.fromkeys(errors))
+            self._plain_message(QMessageBox.Icon.Warning, "Actualisation des données", msg)
+        elif updated_shapes:
+            self.statusBar().showMessage(msg, 8000)
+        else:
+            self._plain_message(QMessageBox.Icon.Information, "Actualisation des données", msg)
+
+    def unlink_data(self) -> None:
+        sc = self.scene()
+        shapes = [s for s in sc.selected_shapes() if s.data_links and not s.locked] if sc else []
+        if not shapes:
+            return
+        relations: dict[tuple[str, str, str], str] = {}
+        used_labels: set[str] = set()
+        for shape in shapes:
+            for link in shape.data_links:
+                identity = _data_link_identity(link)
+                if identity in relations:
+                    continue
+                path = link.get("path", "")
+                source = os.path.basename(path) or "fichier local"
+                target = "texte" if link.get("shape_key") == "__text__" else link.get("shape_key", "")
+                label = f"{source} · {link.get('source_key', '')} ↔ {target}"
+                if label in used_labels:
+                    label = f"{label} — {os.path.dirname(path) or path}"
+                    suffix_index = 2
+                    base_label = label
+                    while label in used_labels:
+                        label = f"{base_label} ({suffix_index})"
+                        suffix_index += 1
+                used_labels.add(label)
+                relations[identity] = label
+        all_label = "— Tous les liens CSV —"
+        choices = list(relations.values())
+        if len(choices) > 1:
+            choices.insert(0, all_label)
+        if len(choices) == 1:
+            selected = choices[0]
+        else:
+            selected, ok = QInputDialog.getItem(self, "Dissocier les données", "Source à dissocier :",
+                                                choices, 0, False)
+            if not ok:
+                return
+        selected_id = next((identity for identity, label in relations.items() if label == selected), None)
+        targets = [shape for shape in shapes if selected == all_label or
+                   any(_data_link_identity(link) == selected_id for link in shape.data_links)]
+        removed = 0
+
+        def update(_it, state):
+            nonlocal removed
+            links = state.get("data_links", [])
+            if selected == all_label:
+                removed += len(links)
+                state.pop("data_links", None)
+            else:
+                kept = [link for link in links if _data_link_identity(link) != selected_id]
+                removed += len(links) - len(kept)
+                if kept:
+                    state["data_links"] = kept
+                else:
+                    state.pop("data_links", None)
+
+        sc.modify(targets, update, "Dissocier les données CSV")
+        self.statusBar().showMessage(f"{removed} lien(s) CSV retiré(s) ; les données importées sont conservées.",
+                                     6000)
+
+    def set_data_graphic(self) -> None:
+        sc = self.scene()
+        shapes = [s for s in sc.selected_shapes() if not s.locked] if sc else []
+        if not shapes:
+            return
+        fields = set(shapes[0].data)
+        for shape in shapes[1:]:
+            fields.intersection_update(shape.data)
+        if not fields:
+            QMessageBox.information(self, "Graphique de données",
+                                    "Les formes sélectionnées doivent partager au moins une propriété.")
+            return
+        dlg = DataGraphicDialog(self, sorted(fields, key=str.casefold), shapes[0].data_graphic)
+        if dlg.exec() != DataGraphicDialog.DialogCode.Accepted:
+            return
+        config = dlg.config()
+        sc.modify(shapes, lambda _it, state: state.__setitem__("data_graphic", config),
+                  "Configurer un graphique de données")
+
+    def clear_data_graphic(self) -> None:
+        sc = self.scene()
+        shapes = [s for s in sc.selected_shapes() if s.data_graphic and not s.locked] if sc else []
+        if not shapes:
+            return
+        sc.modify(shapes, lambda _it, state: state.pop("data_graphic", None),
+                  "Supprimer les graphiques de données")
+
     def shape_report(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Rapport de formes",
                                               os.path.join(self._last_dir(), "rapport-formes.csv"),
@@ -1697,19 +2096,21 @@ class MainWindow(QMainWindow):
                         keys.append(k)
                 rows.append((p.page_name, s))
         buf = io.StringIO()
-        w = csv.writer(buf, delimiter=";")
-        w.writerow(["Page", "Forme", "Texte", "Largeur (mm)", "Hauteur (mm)", "X (mm)", "Y (mm)", "Calque"] + keys)
+        w = csv.writer(buf, delimiter=";", lineterminator="\n")
+        header = ["Page", "Forme", "Texte", "Largeur (mm)", "Hauteur (mm)", "X (mm)",
+                  "Y (mm)", "Calque"] + keys
+        w.writerow([_csv_safe_cell(value) for value in header])
         for page_name, s in rows:
-            w.writerow([page_name, s.sdef.name, s.text.replace("\n", " "), f"{s.w / PX_PER_MM:.1f}",
-                        f"{s.h / PX_PER_MM:.1f}", f"{s.pos().x() / PX_PER_MM:.1f}",
-                        f"{s.pos().y() / PX_PER_MM:.1f}", s.layer] + [s.data.get(k, "") for k in keys])
+            row = [_csv_safe_cell(page_name), _csv_safe_cell(s.sdef.name), _csv_safe_cell(s.text),
+                   f"{s.w / PX_PER_MM:.1f}", f"{s.h / PX_PER_MM:.1f}",
+                   f"{s.pos().x() / PX_PER_MM:.1f}", f"{s.pos().y() / PX_PER_MM:.1f}",
+                   _csv_safe_cell(s.layer)]
+            row.extend(_csv_safe_cell(s.data.get(k, "")) for k in keys)
+            w.writerow(row)
         try:
-            # Préfixe ' pour neutraliser les formules dans les tableurs (injection CSV).
-            text = "\n".join(line if not line[:1] in "=+-@" else "'" + line
-                             for line in buf.getvalue().splitlines())
-            security.atomic_write(path, ("﻿" + text + "\n").encode("utf-8"), private=False)
+            security.atomic_write(path, ("﻿" + buf.getvalue()).encode("utf-8"), private=False)
         except OSError as exc:
-            QMessageBox.critical(self, "Rapports de forme", str(exc))
+            self._plain_message(QMessageBox.Icon.Critical, "Rapports de forme", str(exc))
             return
         self.statusBar().showMessage(f"Rapport enregistré : {path}", 6000)
 
@@ -1772,7 +2173,7 @@ class MainWindow(QMainWindow):
         try:
             data = security.read_file_limited(path, fileformat.MAX_IMAGE_BYTES)
         except security.SecurityError as exc:
-            QMessageBox.warning(self, "Image refusée", str(exc))
+            self._plain_message(QMessageBox.Icon.Warning, "Image refusée", str(exc))
             return
         self._insert_image_bytes(data, pos)
 
@@ -2105,6 +2506,14 @@ class MainWindow(QMainWindow):
                 data_menu = menu.addMenu(icons.icon("shape_data"), "Données")
                 data_menu.addAction(icons.icon("shape_data"), "Fenêtre Données de forme",
                                     lambda: self.show_pane("data"))
+                data_menu.addAction(a["data_link"])
+                data_menu.addAction(a["data_refresh"])
+                if single.data_links:
+                    data_menu.addAction(a["data_unlink"])
+                data_menu.addSeparator()
+                data_menu.addAction(a["data_graphic"])
+                if single.data_graphic:
+                    data_menu.addAction(a["data_graphic_clear"])
                 data_menu.addAction(a["shapesheet"])
                 menu.addAction(a["lock"] if not single.locked else a["unlock"])
             if any(isinstance(i, ConnectorItem) for i in sel):
@@ -2169,9 +2578,9 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, APP_NAME, f"{n} fichier(s) de récupération supprimé(s).")
 
     def new_from_template(self, template: str) -> None:
-        data = templates.build(template)
+        data = templates.build_blank(template)
         doc = Document(data)
-        hint = "Exemple" if template == "sample" else None
+        hint = None
         if self.is_pristine():
             self.title_hint = hint
             self.set_document(doc)
@@ -2243,7 +2652,8 @@ class MainWindow(QMainWindow):
         except fileformat.PasswordRequired:
             return
         except (fileformat.DocumentError, security.SecurityError, OSError) as exc:
-            QMessageBox.critical(self, "Impossible d'ouvrir le document", f"{os.path.basename(path)}\n\n{exc}")
+            self._plain_message(QMessageBox.Icon.Critical, "Impossible d'ouvrir le document",
+                                f"{os.path.basename(path)}\n\n{exc}")
             return
         doc.path = path
         doc.password = password
@@ -2258,8 +2668,11 @@ class MainWindow(QMainWindow):
         target.hide_backstage()
         target.view.fit_page()
         if warnings:
-            QMessageBox.information(target, "Document ouvert avec des remarques",
-                                    "\n".join(f"• {w}" for w in warnings[:12]))
+            box = QMessageBox(QMessageBox.Icon.Information, "Document ouvert avec des remarques",
+                              "\n".join(f"• {w}" for w in warnings[:12]), QMessageBox.StandardButton.Ok,
+                              target)
+            box.setTextFormat(Qt.TextFormat.PlainText)
+            box.exec()
 
     def save(self) -> bool:
         if self.doc.path is None:
@@ -2294,7 +2707,8 @@ class MainWindow(QMainWindow):
             else:
                 self.doc.save(path)
         except (OSError, security.SecurityError, fileformat.DocumentError, ValueError) as exc:
-            QMessageBox.critical(self, "Échec de l'enregistrement", f"{path}\n\n{exc}")
+            self._plain_message(QMessageBox.Icon.Critical, "Échec de l'enregistrement",
+                                f"{path}\n\n{exc}")
             return False
         self._remember_dir(path)
         self.ctx.add_recent(path)
@@ -2317,9 +2731,9 @@ class MainWindow(QMainWindow):
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             fn()
-        except (OSError, security.SecurityError, ValueError) as exc:
+        except (OSError, security.SecurityError, fileformat.DocumentError, ValueError) as exc:
             QApplication.restoreOverrideCursor()
-            QMessageBox.critical(self, "Échec de l'export", f"{path}\n\n{exc}")
+            self._plain_message(QMessageBox.Icon.Critical, "Échec de l'export", f"{path}\n\n{exc}")
             return
         QApplication.restoreOverrideCursor()
         self._remember_dir(path)
@@ -2446,6 +2860,8 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self.settings.setValue("window/geometry", self.saveGeometry())
+        self.settings.setValue("layout/editor_splitter", self.splitter.saveState())
+        self.settings.setValue("layout/ribbon_collapsed", self.ribbon.is_collapsed())
         self.autosave_timer.stop()
         if self.quick_popup is not None:
             self.quick_popup.hide()

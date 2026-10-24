@@ -7,7 +7,7 @@ import copy
 import secrets
 
 from PyQt6.QtCore import QLineF, QPointF, QRectF, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QPen, QPolygonF
+from PyQt6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen, QPolygonF
 from PyQt6.QtWidgets import QApplication, QGraphicsScene
 
 from . import fileformat, layout, quickstyles, stencils, swimlanes
@@ -20,11 +20,22 @@ GUIDE_TOL_PX = 7.0
 AC_DIST_PX = 18.0
 AC_SIZE_PX = 6.0
 CANVAS_BG = QColor("#e7e9ec")
+_DARK_CANVAS = False
 
 
 def set_dark_canvas(dark: bool) -> None:
     """Fond autour de la page, assorti au thème de l'interface."""
+    global _DARK_CANVAS
+    _DARK_CANVAS = dark
     CANVAS_BG.setRgba(QColor("#2b2d31" if dark else "#e7e9ec").rgba())
+
+
+def paint_canvas_backdrop(painter: QPainter, rect: QRectF) -> None:
+    """Dégradé très doux derrière la feuille, inspiré des surfaces Mica de Visio 2024."""
+    gradient = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+    gradient.setColorAt(0, CANVAS_BG.lighter(112 if _DARK_CANVAS else 105))
+    gradient.setColorAt(1, CANVAS_BG.darker(106 if _DARK_CANVAS else 103))
+    painter.fillRect(rect, gradient)
 GRID_MINOR = QColor("#eceff3")
 GRID_MAJOR = QColor("#d7dce3")
 GUIDE = QColor("#d6336c")
@@ -254,7 +265,7 @@ class DiagramScene(QGraphicsScene):
         if self.exporting:
             painter.fillRect(rect, QColor(self.page_bg))
             return
-        painter.fillRect(rect, CANVAS_BG)
+        paint_canvas_backdrop(painter, rect)
         s = self.view_scale
         painter.fillRect(page.translated(3 / s, 3 / s), QColor(0, 0, 0, 45))
         painter.fillRect(page, QColor(self.page_bg))
@@ -292,13 +303,21 @@ class DiagramScene(QGraphicsScene):
             return
         s = self.view_scale
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        if self._draw is not None and not self._draw["rect"].isNull():
-            painter.setPen(QPen(ACCENT, 1 / s, Qt.PenStyle.DashLine))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            if self._draw["tool"] == "ellipse":
-                painter.drawEllipse(self._draw["rect"])
-            else:
-                painter.drawRect(self._draw["rect"])
+        if self._draw is not None:
+            if self._draw["tool"] == "pen":
+                pen = QPen(ACCENT, 2 / s)
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+                painter.setPen(pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawPath(self._draw["preview"])
+            elif not self._draw["rect"].isNull():
+                painter.setPen(QPen(ACCENT, 1 / s, Qt.PenStyle.DashLine))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                if self._draw["tool"] == "ellipse":
+                    painter.drawEllipse(self._draw["rect"])
+                else:
+                    painter.drawRect(self._draw["rect"])
         if self.guides:
             painter.setPen(QPen(GUIDE, 1 / s, Qt.PenStyle.DashLine))
             for line in self.guides:
@@ -539,6 +558,11 @@ class DiagramScene(QGraphicsScene):
             self._draw = {"tool": tool, "start": start, "rect": QRectF()}
             event.accept()
             return
+        if tool == "pen":
+            preview = QPainterPath(pos)
+            self._draw = {"tool": "pen", "points": [QPointF(pos)], "preview": preview}
+            event.accept()
+            return
         if tool == "text":
             item = self.top_item_at(pos)
             if item is not None:
@@ -593,7 +617,23 @@ class DiagramScene(QGraphicsScene):
             event.accept()
             return
         if self._draw is not None:
-            self._draw["rect"] = QRectF(self._draw["start"], self.snap_point(pos)).normalized()
+            if self._draw["tool"] == "pen":
+                points = self._draw["points"]
+                min_distance = 2.0 / max(self.view_scale, 0.1)
+                if QLineF(points[-1], pos).length() >= min_distance:
+                    if len(points) >= 4096:
+                        reduced = points[::2]
+                        if reduced[-1] != points[-1]:
+                            reduced.append(points[-1])
+                        points[:] = reduced
+                        preview = QPainterPath(points[0])
+                        for point in points[1:]:
+                            preview.lineTo(point)
+                        self._draw["preview"] = preview
+                    points.append(QPointF(pos))
+                    self._draw["preview"].lineTo(pos)
+            else:
+                self._draw["rect"] = QRectF(self._draw["start"], self.snap_point(pos)).normalized()
             self.update()
             event.accept()
             return
@@ -614,6 +654,7 @@ class DiagramScene(QGraphicsScene):
 
     def mouseReleaseEvent(self, event):  # noqa: N802
         pos = event.scenePos()
+        self._mouse = pos
         if self._conn_drag is not None:
             self._finish_conn_drag(pos)
             event.accept()
@@ -878,8 +919,42 @@ class DiagramScene(QGraphicsScene):
     def _finish_draw(self) -> None:
         d = self._draw
         self._draw = None
-        r = d["rect"]
         self.update()
+        if d["tool"] == "pen":
+            points = d["points"]
+            end = self._mouse
+            min_distance = 2.0 / max(self.view_scale, 0.1)
+            if QLineF(points[-1], end).length() >= min_distance:
+                if len(points) < 4096:
+                    points.append(QPointF(end))
+                else:
+                    points[-1] = QPointF(end)
+            if len(points) < 2:
+                return
+            left = min(point.x() for point in points)
+            right = max(point.x() for point in points)
+            top = min(point.y() for point in points)
+            bottom = max(point.y() for point in points)
+            if max(right - left, bottom - top) < 2.0 / max(self.view_scale, 0.1):
+                return
+            if right - left < 2.0:
+                left -= (2.0 - (right - left)) / 2
+                right = left + 2.0
+            if bottom - top < 2.0:
+                top -= (2.0 - (bottom - top)) / 2
+                bottom = top + 2.0
+            width, height = right - left, bottom - top
+            commands = [["M", (points[0].x() - left) / width, (points[0].y() - top) / height]]
+            commands.extend([["L", (point.x() - left) / width, (point.y() - top) / height]
+                             for point in points[1:]])
+            center = QPointF(left + width / 2, top + height / 2)
+            st = self.new_shape_state("special.custom", center, width, height, snap=False)
+            st["path"] = commands
+            st["style"]["fill"] = ""
+            st["text"] = ""
+            self.add_states([st], "Tracer à main levée")
+            return
+        r = d["rect"]
         if r.width() * self.view_scale < 4 or r.height() * self.view_scale < 4:
             return
         type_id = "basic.ellipse" if d["tool"] == "ellipse" else "basic.rectangle"

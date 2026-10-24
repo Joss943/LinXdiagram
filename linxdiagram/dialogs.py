@@ -8,14 +8,14 @@ import time
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox,
                              QHBoxLayout, QPushButton,
                              QFormLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
                              QListWidgetItem, QProgressBar, QSpinBox, QTableWidget,
                              QTableWidgetItem, QVBoxLayout)
 
 from . import security
-from .fileformat import clean_shape_style, clean_text_style
+from .fileformat import clean_shape_style, clean_text_style, normalize_status_key
 from .units import PX_PER_INCH
 
 
@@ -739,3 +739,211 @@ class DataImportDialog(QDialog):
         form.addRow("", self.new_page)
         lay.addLayout(form)
         lay.addWidget(_buttons(self, "Choisir le fichier…"))
+
+
+class DataGraphicDialog(QDialog):
+    """Configure un graphique de données et ses couleurs de statut locales."""
+
+    DEFAULT_COLORS = (("Terminé", "#e7f4e4"), ("En cours", "#fff4ce"), ("Bloqué", "#fde7e9"))
+
+    def __init__(self, parent, fields: list[str], config: dict | None = None):
+        super().__init__(parent)
+        config = config or {}
+        self.setWindowTitle("Configurer un graphique de données")
+        self.resize(520, 430)
+        lay = QVBoxLayout(self)
+        form = QFormLayout()
+        self.field = QComboBox()
+        for value in sorted(fields, key=str.casefold):
+            self.field.addItem(value, value)
+        current_field = config.get("field", "")
+        index = self.field.findData(current_field)
+        if index >= 0:
+            self.field.setCurrentIndex(index)
+        form.addRow("Propriété à afficher :", self.field)
+        self.display = QComboBox()
+        for label, value in (("Étiquette et valeur", "label_value"), ("Valeur seule", "value"),
+                             ("Pastille de statut colorée", "status")):
+            self.display.addItem(label, value)
+        index = self.display.findData(config.get("display", "label_value"))
+        if index >= 0:
+            self.display.setCurrentIndex(index)
+        form.addRow("Présentation :", self.display)
+        lay.addLayout(form)
+        self.rules_hint = QLabel("Les règles personnalisées ignorent la casse et les accents. "
+                                 "Les autres valeurs gardent les couleurs de statut automatiques.")
+        self.rules_hint.setWordWrap(True)
+        lay.addWidget(self.rules_hint)
+        self.rules = QTableWidget(0, 2)
+        self.rules.setHorizontalHeaderLabels(["Valeur du statut", "Couleur de fond"])
+        self.rules.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.rules.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.rules.verticalHeader().setVisible(False)
+        self.rules.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.rules.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.rules.cellDoubleClicked.connect(self._choose_color)
+        lay.addWidget(self.rules, 1)
+        row = QHBoxLayout()
+        self.add_rule = QPushButton("Ajouter une règle")
+        self.remove_rule = QPushButton("Supprimer")
+        self.add_rule.clicked.connect(lambda _checked=False: self._add_rule())
+        self.remove_rule.clicked.connect(lambda _checked=False: self._remove_rules())
+        row.addWidget(self.add_rule)
+        row.addWidget(self.remove_rule)
+        row.addStretch(1)
+        lay.addLayout(row)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                   QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
+        rules = config.get("status_colors")
+        if isinstance(rules, list):
+            for rule in rules[:50]:
+                if isinstance(rule, dict):
+                    self._add_rule(rule.get("value", ""), rule.get("color", "#fff4ce"), edit=False)
+        else:
+            for value, color in self.DEFAULT_COLORS:
+                self._add_rule(value, color, edit=False)
+        self.display.currentIndexChanged.connect(self._refresh_rules)
+        self._refresh_rules()
+
+    def _add_rule(self, value: str = "", color: str = "#fff4ce", edit: bool = True) -> None:
+        if self.rules.rowCount() >= 50:
+            return
+        row = self.rules.rowCount()
+        self.rules.insertRow(row)
+        value_item = QTableWidgetItem(str(value)[:200])
+        value_item.setToolTip("Valeur exacte après normalisation de la casse et des accents")
+        self.rules.setItem(row, 0, value_item)
+        self._set_color(row, color)
+        self.rules.setCurrentCell(row, 0)
+        if edit:
+            self.rules.editItem(value_item)
+        self._refresh_rules()
+
+    def _set_color(self, row: int, color: str) -> None:
+        parsed = QColor(color)
+        if not parsed.isValid():
+            parsed = QColor("#fff4ce")
+        item = QTableWidgetItem(parsed.name())
+        item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+        item.setBackground(parsed)
+        item.setForeground(QColor("#27313d" if parsed.lightness() >= 145 else "#ffffff"))
+        item.setToolTip("Double-cliquez pour choisir une couleur")
+        self.rules.setItem(row, 1, item)
+
+    def _choose_color(self, row: int, column: int) -> None:
+        if column != 1:
+            return
+        current = QColor(self.rules.item(row, column).text())
+        color = QColorDialog.getColor(current, self, "Couleur de statut")
+        if color.isValid():
+            self._set_color(row, color.name())
+
+    def _remove_rules(self) -> None:
+        rows = sorted({index.row() for index in self.rules.selectionModel().selectedRows()}, reverse=True)
+        if not rows and self.rules.currentRow() >= 0:
+            rows = [self.rules.currentRow()]
+        for row in rows:
+            self.rules.removeRow(row)
+        self._refresh_rules()
+
+    def _refresh_rules(self, *_args) -> None:
+        enabled = self.display.currentData() == "status"
+        self.rules_hint.setEnabled(enabled)
+        self.rules.setEnabled(enabled)
+        self.add_rule.setEnabled(enabled and self.rules.rowCount() < 50)
+        self.remove_rule.setEnabled(enabled and self.rules.rowCount() > 0)
+
+    def config(self) -> dict:
+        result = {"field": str(self.field.currentData()), "display": str(self.display.currentData())}
+        if result["display"] == "status":
+            rules, seen = [], set()
+            for row in range(self.rules.rowCount()):
+                value = security.clean_line(self.rules.item(row, 0).text(), 200)
+                color = self.rules.item(row, 1).text()
+                key = normalize_status_key(value)
+                if not key or key in seen or not QColor(color).isValid():
+                    continue
+                seen.add(key)
+                rules.append({"value": value, "color": QColor(color).name()})
+            if rules:
+                result["status_colors"] = rules
+        return result
+
+
+class DataLinkDialog(QDialog):
+    """Associe les colonnes d'un CSV local aux formes via une clé stable."""
+
+    def __init__(self, headers: list[str], rows: list[list[str]], shapes: list, parent=None):
+        super().__init__(parent)
+        self.headers = headers
+        self.rows = rows
+        self.shapes = shapes
+        self.setWindowTitle("Lier les formes à un fichier CSV")
+        self.setMinimumWidth(520)
+        lay = QVBoxLayout(self)
+        intro = QLabel("Choisissez la colonne du CSV à comparer au texte d'une forme ou à une propriété "
+                       "existante. Les colonnes sont ajoutées aux données des formes ; vous pouvez lier "
+                       "plusieurs fichiers locaux au même dessin. Si un nom existe déjà, le nom du fichier "
+                       "est ajouté à la colonne pour éviter d'écraser les autres données. Les chemins locaux "
+                       "sont conservés dans le dessin .lxd pour actualiser les sources à la demande.")
+        intro.setWordWrap(True)
+        lay.addWidget(intro)
+        form = QFormLayout()
+        self.source_key = QComboBox()
+        for header in headers:
+            self.source_key.addItem(header, header)
+        for i, header in enumerate(headers):
+            if header.casefold() in ("id", "identifiant", "code"):
+                self.source_key.setCurrentIndex(i)
+                break
+        form.addRow("Colonne clé du CSV :", self.source_key)
+        self.shape_key = QComboBox()
+        self.shape_key.addItem("Texte de la forme", "__text__")
+        keys = sorted({key for shape in shapes for key in shape.data}, key=str.casefold)
+        for key in keys:
+            self.shape_key.addItem(f"Donnée : {key}", key)
+        form.addRow("Comparer avec :", self.shape_key)
+        lay.addLayout(form)
+        self.preview = QLabel()
+        self.preview.setWordWrap(True)
+        lay.addWidget(self.preview)
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                        QDialogButtonBox.StandardButton.Cancel)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        lay.addWidget(self.buttons)
+        self.source_key.currentIndexChanged.connect(self._update_preview)
+        self.shape_key.currentIndexChanged.connect(self._update_preview)
+        self._update_preview()
+
+    def mapping(self) -> tuple[str, str]:
+        return str(self.source_key.currentData()), str(self.shape_key.currentData())
+
+    def _update_preview(self) -> None:
+        source_key, shape_key = self.mapping()
+        try:
+            source_index = self.headers.index(source_key)
+        except ValueError:
+            source_index = -1
+        values = [row[source_index].strip() for row in self.rows
+                  if source_index >= 0 and source_index < len(row) and row[source_index].strip()]
+        duplicates = len(values) - len(set(values))
+        source_values = set(values)
+        def shape_value(shape):
+            return shape.text.strip() if shape_key == "__text__" else str(shape.data.get(shape_key, "")).strip()
+        matched = sum(1 for shape in self.shapes if shape_value(shape) in source_values and shape_value(shape))
+        if duplicates:
+            message = f"La colonne contient {duplicates} clé(s) en double. Choisissez une colonne unique."
+            valid = False
+        elif not matched:
+            message = "Aucune forme ne correspond. Vérifiez la clé ou modifiez les données des formes."
+            valid = False
+        else:
+            message = f"Aperçu : {matched} forme(s) correspondent à {len(source_values)} ligne(s) du CSV."
+            valid = True
+        self.preview.setText(message)
+        self.preview.setStyleSheet("color: #b42318;" if not valid else "color: #16803c;")
+        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(valid)

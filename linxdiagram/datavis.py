@@ -48,12 +48,20 @@ def parse_csv(data: bytes) -> tuple[list[str], list[list[str]]]:
         dialect = csv.Sniffer().sniff(sample, delimiters=",;\t")
     except csv.Error:
         dialect = csv.excel
-    rows = list(csv.reader(io.StringIO(text), dialect))
-    rows = [r for r in rows if any(c.strip() for c in r)]
+    rows = []
+    try:
+        for row in csv.reader(io.StringIO(text), dialect):
+            if not any(c.strip() for c in row):
+                continue
+            if len(row) > fileformat.MAX_DATA_FIELDS:
+                raise DataError(f"Trop de colonnes (maximum {fileformat.MAX_DATA_FIELDS}).")
+            rows.append(row)
+            if len(rows) > MAX_ROWS + 1:
+                raise DataError(f"Trop de lignes (maximum {MAX_ROWS}).")
+    except csv.Error as exc:
+        raise DataError("Le fichier CSV est mal formé ou contient une cellule trop volumineuse.") from exc
     if len(rows) < 2:
         raise DataError("Le fichier doit contenir une ligne d'en-têtes et au moins une ligne de données.")
-    if len(rows) > MAX_ROWS + 1:
-        raise DataError(f"Trop de lignes (maximum {MAX_ROWS}).")
     clean = [[security.clean_line(c, 500) for c in r] for r in rows]
     return clean[0], clean[1:]
 
