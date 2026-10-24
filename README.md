@@ -35,8 +35,10 @@ Carlito (métriquement identique à Calibri) est utilisée si elle est installé
   dialogue ↘, réduction du ruban (Ctrl+F1 ou double-clic sur un onglet).
 * **Volet Formes** : onglets FORMES / RECHERCHER, « Plus de formes », Formes rapides, gabarits ouverts,
   liste à deux colonnes, glisser-déposer.
+* Gabarit de processus **BPMN 2.0** avec événements, tâches, sous-processus, passerelles et objets de données.
 * **Volets de tâches** : Format de la forme (Remplissage et trait, Effets, Texte, Taille et
-  propriétés), Taille et position, Données de forme, Commentaires, Problèmes, Panoramique et zoom.
+  propriétés), Taille et position, Données de forme, Commentaires, Problèmes, Panoramique et zoom,
+  et **Explorateur de dessin** avec recherche et sélection des formes, groupes et connecteurs de la page.
 * **Onglets de pages** avec navigation ◀ ▶, menu « Tout » et ⊕ ; **barre d'état** avec page, taille et
   angle de la sélection, langue, mode Présentation et curseur de zoom.
 * **Menu Fichier** façon Microsoft 365 : Accueil (« Bonjour », vignettes de modèles, récents),
@@ -46,6 +48,8 @@ Carlito (métriquement identique à Calibri) est utilisée si elle est installé
 * La largeur des volets Formes et Format, ainsi que l'état du ruban réduit, sont mémorisés entre
   les sessions. Le canevas ne redessine que les zones modifiées lorsque c'est possible, ce qui
   améliore la réactivité des grands diagrammes.
+* La compatibilité et les écarts restants par rapport à Visio sont suivis dans
+  [la feuille de route de parité](docs/parite-visio.md).
 
 ## Fonctions Visio
 

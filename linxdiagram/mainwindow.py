@@ -28,8 +28,8 @@ from .dialogs import (DataImportDialog, FindReplaceDialog, ImageExportDialog, La
                       ShapeSheetDialog, ShortcutsDialog, ZoomDialog)
 from .document import Document
 from .items import ConnectorItem, ShapeItem, decode_image
-from .panes import (CommentsPane, FormatPane, IssuesPane, PanZoomPane, ShapeDataPane, ShapesPane,
-                    SizePositionPane, TaskPaneArea)
+from .panes import (CommentsPane, DrawingExplorerPane, FormatPane, IssuesPane, PanZoomPane,
+                    ShapeDataPane, ShapesPane, SizePositionPane, TaskPaneArea)
 from .presentation import PresentationView
 from .ribbon import ICON, SMALL, Ribbon, RibbonButton, RibbonGallery, RibbonGroup
 from .style import T
@@ -51,7 +51,8 @@ BACKGROUNDS = (("#ffffff", "Blanc"), ("#f3f2f1", "Gris clair"), ("#eaf1fb", "Ble
 BORDERS = (("simple", "Simple"), ("band", "Bandeau"), ("frame", "Cadre technique"), ("modern", "Moderne"))
 PANES = (("format", "Format de la forme", "format_panel"), ("size", "Taille et position", "size_position"),
          ("data", "Données de forme", "shape_data"), ("comments", "Commentaires", "comments"),
-         ("issues", "Problèmes", "check_diagram"), ("panzoom", "Panoramique et zoom", "pan_zoom"))
+         ("issues", "Problèmes", "check_diagram"), ("panzoom", "Panoramique et zoom", "pan_zoom"),
+         ("drawing", "Explorateur de dessin", "layers"))
 
 
 class MainWindow(QMainWindow):
@@ -387,8 +388,10 @@ class MainWindow(QMainWindow):
         self.comments_pane = CommentsPane(self)
         self.issues_pane = IssuesPane(self)
         self.panzoom_pane = PanZoomPane(self)
+        self.drawing_pane = DrawingExplorerPane(self)
         for (key, title, _ic), body in zip(PANES, (self.format_pane, self.size_pane, self.data_pane,
-                                                  self.comments_pane, self.issues_pane, self.panzoom_pane)):
+                                                  self.comments_pane, self.issues_pane, self.panzoom_pane,
+                                                  self.drawing_pane)):
             self.task_panes.add(key, title, body)
         self.task_panes.visibilityChanged.connect(self._pane_visibility)
         self.task_panes.setMinimumWidth(280)
@@ -776,6 +779,9 @@ class MainWindow(QMainWindow):
         g = RibbonGroup("Affichages")
         g.large(a["presentation"])
         view.addWidget(g)
+        g = RibbonGroup("Explorateur")
+        g.large(a["pane_drawing"])
+        view.addWidget(g)
         g = RibbonGroup("Afficher")
         g.column(self._check(a["rulers"]), self._check(a["grid"]))
         view.addWidget(g)
@@ -1049,6 +1055,8 @@ class MainWindow(QMainWindow):
         if scene not in self.doc.pages:
             return
         self.view.show_scene(scene)
+        if self.task_panes.is_visible("drawing"):
+            self.drawing_pane.refresh()
         idx = self.doc.pages.index(scene)
         if self.page_tabs.currentIndex() != idx:
             self.page_tabs.blockSignals(True)
@@ -1230,6 +1238,8 @@ class MainWindow(QMainWindow):
         for pane in (self.format_pane, self.size_pane, self.data_pane, self.comments_pane):
             if pane.isVisible():
                 pane.refresh()
+        if self.task_panes.is_visible("drawing"):
+            self.drawing_pane.sync_selection()
         self._update_status()
 
     def _update_status(self) -> None:
@@ -1261,7 +1271,8 @@ class MainWindow(QMainWindow):
         act.blockSignals(False)
         self.settings.setValue(f"panes/{key}", on)
         pane = {"format": self.format_pane, "size": self.size_pane, "data": self.data_pane,
-                "comments": self.comments_pane, "panzoom": self.panzoom_pane}.get(key)
+                "comments": self.comments_pane, "panzoom": self.panzoom_pane,
+                "drawing": self.drawing_pane}.get(key)
         if on and pane is not None:
             pane.refresh()
 

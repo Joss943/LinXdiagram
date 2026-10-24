@@ -9,6 +9,7 @@ from .units import PAGE_SIZES, connector_style, connector_text_style, mm_to_px
 TEMPLATE_SETUP = {
     "blank": (stencils.BASIC, "orthogonal", False),
     "flow": (stencils.FLOW, "orthogonal", False),
+    "bpmn": (stencils.BPMN, "orthogonal", True),
     "org": (stencils.ORG, "orthogonal", True),
     "network": (stencils.NET, "straight", True),
     "uml": (stencils.UML, "straight", False),
@@ -58,6 +59,22 @@ def build(template: str) -> dict:
     if template == "cff":
         page["shapes"] = cff_states("h", 15, 15, ["Fonction", "Fonction", "Fonction"],
                                     "Titre du diagramme", length_mm=265, lane_mm=48)
+    if template == "bpmn":
+        shapes = [
+            ("b1", "bpmn.start", 30, 105, "Début"),
+            ("b2", "bpmn.task", 78, 105, "Recevoir la demande"),
+            ("b3", "bpmn.gateway_xor", 137, 105, "Complète ?"),
+            ("b4", "bpmn.task", 190, 70, "Analyser"),
+            ("b5", "bpmn.task", 190, 140, "Demander les pièces"),
+            ("b6", "bpmn.end", 250, 105, "Traitement terminé"),
+        ]
+        page["shapes"] = [_shape(i, t, x, y, text, n) for n, (i, t, x, y, text) in enumerate(shapes)]
+        links = [("b1", "b2", ""), ("b2", "b3", ""), ("b3", "b4", "Oui"),
+                 ("b3", "b5", "Non"), ("b4", "b6", ""), ("b5", "b2", "")]
+        page["connectors"] = [_conn(f"bc{n}", a, b, 100 + n, text)
+                              for n, (a, b, text) in enumerate(links)]
+        for conn in page["connectors"]:
+            conn["style"]["line"] = "#404040"
     if template == "sample":
         doc["properties"]["title"] = "Traitement d'une commande"
         shapes = [
@@ -95,6 +112,7 @@ def category_for(template: str) -> str:
 TEMPLATES = [
     ("blank", "Dessin vierge"),
     ("flow", "Diagramme de flux de base"),
+    ("bpmn", "Diagramme de processus BPMN"),
     ("org", "Organigramme hiérarchique"),
     ("network", "Diagramme réseau de base"),
     ("cff", "Diagramme de flux interfonctionnel"),
@@ -107,6 +125,8 @@ def preview(template: str) -> dict:
     """Petit diagramme d'illustration pour la vignette du modèle (comme dans Visio)."""
     if template == "sample":
         return build("sample")
+    if template == "bpmn":
+        return build("bpmn")
     page = fileformat.default_page("Aperçu")
     if template == "cff":
         page["shapes"] = cff_states("h", 10, 10, ["Client", "Ventes", "Logistique"], "Commande",

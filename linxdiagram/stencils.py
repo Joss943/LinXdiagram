@@ -382,6 +382,38 @@ def _b_lollipop():
     return _ellipse(0.5, 0.5, 0.5, 0.5), None
 
 
+def _bpmn_event(ring: str = "start"):
+    outline = _ellipse(0.5, 0.5, 0.48, 0.48)
+    detail = (_ellipse(0.5, 0.5, 0.38, 0.38) if ring == "intermediate" else
+              _ellipse(0.5, 0.5, 0.34, 0.34) if ring == "end" else None)
+    return outline, detail
+
+
+def _bpmn_gateway(marker: str = "xor"):
+    outline = _poly_path([(0.5, 0), (1, 0.5), (0.5, 1), (0, 0.5)])
+    if marker == "parallel":
+        detail = _lines([(0.5, 0.28), (0.5, 0.72)], [(0.28, 0.5), (0.72, 0.5)])
+    elif marker == "inclusive":
+        detail = _ellipse(0.5, 0.5, 0.14, 0.14)
+    else:
+        detail = _lines([(0.38, 0.38), (0.62, 0.62)], [(0.62, 0.38), (0.38, 0.62)])
+    return outline, detail
+
+
+def _bpmn_task(w: float, h: float):
+    p = QPainterPath()
+    p.addRoundedRect(QRectF(0, 0, w, h), min(w, h) * 0.1, min(w, h) * 0.1)
+    return p, None
+
+
+def _bpmn_subprocess(w: float, h: float):
+    p = QPainterPath()
+    p.addRoundedRect(QRectF(0, 0, w, h), min(w, h) * 0.08, min(w, h) * 0.08)
+    detail = _lines([(w * 0.45, h * 0.88), (w * 0.55, h * 0.88)],
+                    [(w * 0.5, h * 0.83), (w * 0.5, h * 0.93)])
+    return p, detail
+
+
 def _arrow_pts(direction: str):
     right = [(0, 0.25), (0.6, 0.25), (0.6, 0), (1, 0.5), (0.6, 1), (0.6, 0.75), (0, 0.75)]
     if direction == "right":
@@ -402,8 +434,9 @@ ORG = "Organigramme hiérarchique"
 NET = "Réseau"
 UML = "UML / Logiciel"
 CFF = "Diagramme de flux interfonctionnel"
+BPMN = "BPMN"
 
-CATEGORIES = (BASIC, FLOW, CFF, ARROWS_CAT, ORG, NET, UML)
+CATEGORIES = (BASIC, FLOW, BPMN, CFF, ARROWS_CAT, ORG, NET, UML)
 
 _TRI_PORTS = ((0.5, 0.0), (0.75, 0.5), (0.5, 1.0), (0.25, 0.5))
 _LABEL_BELOW = (-0.6, 1.04, 2.2, 0.55)
@@ -586,6 +619,40 @@ _DEFS: list[ShapeDef] = [
              keywords="fin"),
     ShapeDef("uml.interface", "Interface", UML, _unit(_b_lollipop), (8, 8), text_rect=(-2, 1.1, 5, 1.5),
              label_outside=True, keywords="lollipop api"),
+
+    # BPMN 2.0 : événements, activités, passerelles et données.
+    ShapeDef("bpmn.start", "Événement de début", BPMN, _unit(lambda: _bpmn_event("start")), (18, 18),
+             text_rect=_LABEL_BELOW, label_outside=True, keywords="start event début bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "themed": False}),
+    ShapeDef("bpmn.intermediate", "Événement intermédiaire", BPMN,
+             _unit(lambda: _bpmn_event("intermediate")), (18, 18), text_rect=_LABEL_BELOW,
+             label_outside=True, keywords="intermediate event bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "themed": False}),
+    ShapeDef("bpmn.end", "Événement de fin", BPMN, _unit(lambda: _bpmn_event("end")), (18, 18),
+             text_rect=_LABEL_BELOW, label_outside=True, keywords="end event fin bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "line_width": 2.25, "themed": False}),
+    ShapeDef("bpmn.task", "Tâche", BPMN, _bpmn_task, (42, 25), keywords="activité task activity bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "themed": False}),
+    ShapeDef("bpmn.subprocess", "Sous-processus", BPMN, _bpmn_subprocess, (42, 25),
+             keywords="activité imbriquée subprocess bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "themed": False}),
+    ShapeDef("bpmn.gateway_xor", "Passerelle exclusive", BPMN, _unit(lambda: _bpmn_gateway("xor")), (22, 22),
+             text_rect=_LABEL_BELOW, label_outside=True, keywords="gateway xor décision bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "themed": False}),
+    ShapeDef("bpmn.gateway_parallel", "Passerelle parallèle", BPMN,
+             _unit(lambda: _bpmn_gateway("parallel")), (22, 22), text_rect=_LABEL_BELOW,
+             label_outside=True, keywords="gateway parallel parallèle bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "themed": False}),
+    ShapeDef("bpmn.gateway_inclusive", "Passerelle inclusive", BPMN,
+             _unit(lambda: _bpmn_gateway("inclusive")), (22, 22), text_rect=_LABEL_BELOW,
+             label_outside=True, keywords="gateway inclusive bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "themed": False}),
+    ShapeDef("bpmn.data", "Objet de données", BPMN, _unit(_b_note), (22, 28),
+             text_rect=(0.05, 0.2, 0.75, 0.7), keywords="data object document bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "themed": False}),
+    ShapeDef("bpmn.datastore", "Magasin de données", BPMN, _b_cylinder, (24, 28),
+             text_rect=(0, 0.25, 1, 0.65), keywords="data store base de données bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "themed": False}),
 ]
 
 _CFF_STYLE = {"fill": "#dce6f2", "line": "#7f9cc9", "themed": False}

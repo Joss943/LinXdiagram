@@ -3,7 +3,7 @@ position, Données de forme, Commentaires, Problèmes, Panoramique et zoom."""
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QMimeData, QRect, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QMimeData, QRect, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QIcon, QPainter
 from PyQt6.QtWidgets import (QSizePolicy, QAbstractItemView, QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox,
                              QFontComboBox, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
@@ -1153,6 +1153,186 @@ class PanZoomPane(QWidget):
 
     def refresh(self) -> None:
         self.overview._sync()
+
+
+# =========================================================================== Explorateur de dessin
+
+class DrawingExplorerPane(QWidget):
+    """Liste filtrable des formes et connecteurs de la page active."""
+
+    def __init__(self, window):
+        super().__init__()
+        self.win = window
+        self._scene = None
+        self._scene_slot = None
+        self._rows_by_id: dict[str, QTreeWidgetItem] = {}
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(160)
+        self._timer.timeout.connect(self._rebuild)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(8, 2, 8, 8)
+        lay.setSpacing(6)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Rechercher des formes et connecteurs")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self.schedule_refresh)
+        lay.addWidget(self.search)
+
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["Objet", "Type"])
+        self.tree.setRootIsDecorated(True)
+        self.tree.setAlternatingRowColors(True)
+        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.tree.setUniformRowHeights(True)
+        self.tree.itemSelectionChanged.connect(self._selection_changed)
+        self.tree.itemDoubleClicked.connect(self._activate)
+        lay.addWidget(self.tree, 1)
+
+    def refresh(self) -> None:
+        scene = self.win.scene()
+        if scene is not self._scene:
+            if self._scene is not None and self._scene_slot is not None:
+                try:
+                    self._scene.changed.disconnect(self._scene_slot)
+                except (TypeError, RuntimeError):
+                    pass
+            self._scene = scene
+            self._scene_slot = None
+            if scene is not None:
+                self._scene_slot = lambda *_: self.schedule_refresh()
+                scene.changed.connect(self._scene_slot)
+        self.schedule_refresh()
+
+    def schedule_refresh(self, *_args) -> None:
+        self._timer.start()
+
+    @staticmethod
+    def _label(item) -> tuple[str, str]:
+        if isinstance(item, ShapeItem):
+            label = next((line.strip() for line in item.text.splitlines() if line.strip()), item.sdef.name)
+            return label, item.sdef.name
+        label = next((line.strip() for line in item.text.splitlines() if line.strip()), "Connecteur")
+        return label, "Connecteur"
+
+    def _rebuild(self) -> None:
+        scene = self._scene
+        if scene is None:
+            self.tree.clear()
+            self._rows_by_id.clear()
+            return
+
+        groups: dict[str, list] = {}
+        entries = []
+        for item in scene.all_items():
+            if isinstance(item, ShapeItem) and item.group:
+                groups.setdefault(item.group, []).append(item)
+            else:
+                entries.append((item.zValue(), item, None))
+        for group_id, members in groups.items():
+            entries.append((max(member.zValue() for member in members), None, (group_id, members)))
+
+        needle = self.search.text().strip().casefold()
+        self._rows_by_id.clear()
+        self.tree.blockSignals(True)
+        try:
+            self.tree.clear()
+            selected_ids = {item.id for item in scene.selected_all()}
+            for _z, item, group in sorted(entries, key=lambda entry: entry[0], reverse=True):
+                if group is not None:
+                    group_id, members = group
+                    parent = QTreeWidgetItem([f"Groupe ({len(members)})", "Groupe"])
+                    parent.setData(0, Qt.ItemDataRole.UserRole, [member.id for member in members])
+                    parent.setData(0, Qt.ItemDataRole.UserRole + 1, group_id.casefold())
+                    self.tree.addTopLevelItem(parent)
+                    parent.setExpanded(True)
+                    for member in sorted(members, key=lambda value: value.zValue(), reverse=True):
+                        child = self._add_item(parent, member)
+                        self._rows_by_id[member.id] = child
+                else:
+                    row = self._add_item(None, item)
+                    self._rows_by_id[item.id] = row
+            self._apply_filter(needle)
+            for item_id in selected_ids:
+                row = self._rows_by_id.get(item_id)
+                if row is not None:
+                    row.setSelected(True)
+        finally:
+            self.tree.blockSignals(False)
+
+    def _add_item(self, parent, item) -> QTreeWidgetItem:
+        label, kind = self._label(item)
+        row = QTreeWidgetItem([label, kind])
+        row.setData(0, Qt.ItemDataRole.UserRole, [item.id])
+        row.setData(0, Qt.ItemDataRole.UserRole + 1,
+                    f"{label} {kind} {item.id}".casefold())
+        row.setToolTip(0, f"{label}\n{kind}\nID : {item.id}")
+        row.setToolTip(1, f"ID : {item.id}")
+        if isinstance(item, ShapeItem):
+            row.setIcon(0, QIcon(icons.stencil_pixmap(item.sdef, 24)))
+            if item.locked:
+                row.setText(0, f"{label} — verrouillée")
+        else:
+            row.setIcon(0, icons.icon("connector"))
+        if parent is None:
+            self.tree.addTopLevelItem(row)
+        else:
+            parent.addChild(row)
+        return row
+
+    def _apply_filter(self, needle: str) -> None:
+        for i in range(self.tree.topLevelItemCount()):
+            row = self.tree.topLevelItem(i)
+            if row.childCount():
+                visible_child = False
+                for j in range(row.childCount()):
+                    child = row.child(j)
+                    visible = not needle or needle in child.data(0, Qt.ItemDataRole.UserRole + 1)
+                    child.setHidden(not visible)
+                    visible_child |= visible
+                row.setHidden(not visible_child and needle not in
+                              row.data(0, Qt.ItemDataRole.UserRole + 1))
+            else:
+                row.setHidden(bool(needle) and needle not in row.data(0, Qt.ItemDataRole.UserRole + 1))
+
+    def _selection_changed(self) -> None:
+        scene = self._scene
+        if scene is None:
+            return
+        ids = []
+        for row in self.tree.selectedItems():
+            ids.extend(row.data(0, Qt.ItemDataRole.UserRole) or [])
+        items = list({item_id: scene.item_by_id(item_id) for item_id in ids
+                      if scene.item_by_id(item_id) is not None}.values())
+        scene.select_items(items)
+        if items:
+            self.win.view.centerOn(items[0])
+
+    def sync_selection(self) -> None:
+        scene = self._scene
+        if scene is None:
+            return
+        selected = {item.id for item in scene.selected_all()}
+        self.tree.blockSignals(True)
+        try:
+            self.tree.clearSelection()
+            for item_id in selected:
+                row = self._rows_by_id.get(item_id)
+                if row is not None and not row.isHidden():
+                    row.setSelected(True)
+        finally:
+            self.tree.blockSignals(False)
+
+    def _activate(self, row, _column: int) -> None:
+        scene = self._scene
+        if scene is None:
+            return
+        ids = row.data(0, Qt.ItemDataRole.UserRole) or []
+        if len(ids) == 1:
+            item = scene.item_by_id(ids[0])
+            if isinstance(item, ShapeItem):
+                item.start_edit(select_all=True)
 
 
 class TaskPaneArea(QSplitter):
