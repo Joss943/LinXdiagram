@@ -1055,8 +1055,7 @@ class MainWindow(QMainWindow):
         if scene not in self.doc.pages:
             return
         self.view.show_scene(scene)
-        if self.task_panes.is_visible("drawing"):
-            self.drawing_pane.refresh()
+        self.drawing_pane.refresh()
         idx = self.doc.pages.index(scene)
         if self.page_tabs.currentIndex() != idx:
             self.page_tabs.blockSignals(True)

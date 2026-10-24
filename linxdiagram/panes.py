@@ -1163,8 +1163,9 @@ class DrawingExplorerPane(QWidget):
     def __init__(self, window):
         super().__init__()
         self.win = window
+        self._doc = None
+        self._doc_slots = []
         self._scene = None
-        self._scene_slot = None
         self._rows_by_id: dict[str, QTreeWidgetItem] = {}
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -1191,22 +1192,27 @@ class DrawingExplorerPane(QWidget):
         lay.addWidget(self.tree, 1)
 
     def refresh(self) -> None:
-        scene = self.win.scene()
-        if scene is not self._scene:
-            if self._scene is not None and self._scene_slot is not None:
+        doc = self.win.doc
+        if doc is not self._doc:
+            for signal, slot in self._doc_slots:
                 try:
-                    self._scene.changed.disconnect(self._scene_slot)
+                    signal.disconnect(slot)
                 except (TypeError, RuntimeError):
                     pass
-            self._scene = scene
-            self._scene_slot = None
-            if scene is not None:
-                self._scene_slot = lambda *_: self.schedule_refresh()
-                scene.changed.connect(self._scene_slot)
+            self._doc = doc
+            self._doc_slots = []
+            if doc is not None:
+                for signal in (doc.pagesChanged, doc.undo_stack.indexChanged):
+                    slot = self.schedule_refresh
+                    signal.connect(slot)
+                    self._doc_slots.append((signal, slot))
+        scene = self.win.scene()
+        self._scene = scene
         self.schedule_refresh()
 
     def schedule_refresh(self, *_args) -> None:
-        self._timer.start()
+        if self.isVisible():
+            self._timer.start()
 
     @staticmethod
     def _label(item) -> tuple[str, str]:
