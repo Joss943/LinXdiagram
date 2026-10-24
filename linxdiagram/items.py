@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import base64
 import math
+import unicodedata
 
 from PyQt6.QtCore import QBuffer, QByteArray, QIODevice, QLineF, QPointF, QRectF, Qt
 from PyQt6.QtGui import (QBrush, QColor, QFont, QImageReader, QKeySequence, QLinearGradient,
-                         QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap, QPolygonF,
-                         QTextDocument, QTextOption, QTransform)
+                         QFontMetricsF, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap,
+                         QPolygonF, QTextDocument, QTextOption, QTransform)
 from PyQt6.QtWidgets import (QApplication, QGraphicsItem, QGraphicsTextItem, QMenu,
                              QStyleOptionGraphicsItem)
 
@@ -251,6 +252,7 @@ class ShapeItem(TextOwner):
         self.style: dict = {}
         self.data: dict = {}
         self.data_link: dict = {}
+        self.data_graphic: dict = {}
         self.link = ""
         self.group = ""
         self.image_b64 = ""
@@ -279,6 +281,8 @@ class ShapeItem(TextOwner):
              "layer": self.layer}
         if self.data_link:
             d["data_link"] = dict(self.data_link)
+        if self.data_graphic:
+            d["data_graphic"] = dict(self.data_graphic)
         if self.type_id == "special.image":
             d["image"] = self.image_b64
         if self.type_id == "special.custom":
@@ -304,6 +308,7 @@ class ShapeItem(TextOwner):
         self.text = st["text"]
         self.data = dict(st.get("data", {}))
         self.data_link = dict(st.get("data_link", {}))
+        self.data_graphic = dict(st.get("data_graphic", {}))
         self.link = st.get("link", "")
         self.group = st.get("group", "")
         if self.type_id == "special.image" and st.get("image", "") != self.image_b64:
@@ -379,7 +384,34 @@ class ShapeItem(TextOwner):
         r = self.box()
         if self.sdef.label_outside and self.text:
             r = r.united(self.label.mapRectToParent(self.label.boundingRect()))
+        data_rect = self.data_graphic_rect()
+        if not data_rect.isNull():
+            r = r.united(data_rect)
+            r = r.united(self.data_graphic_rect(1.0))
         return self.mapRectToScene(r)
+
+    def data_graphic_text(self) -> str:
+        field = self.data_graphic.get("field", "")
+        value = self.data.get(field, "") if field else ""
+        if not isinstance(value, str) or not value.strip():
+            return ""
+        if self.data_graphic.get("display") == "label_value":
+            return f"{field} · {value}"
+        return value
+
+    def data_graphic_rect(self, scale: float | None = None) -> QRectF:
+        text = self.data_graphic_text()
+        if not text:
+            return QRectF()
+        s = max(scale or self._scale(), 1e-6)
+        font = QFont("Arial")
+        font.setPixelSize(max(1, round(11.0 / s)))
+        metrics = QFontMetricsF(font)
+        max_width = 240.0 / s
+        width = min(max_width, max(52.0 / s, metrics.horizontalAdvance(text) + 16.0 / s))
+        height = 22.0 / s
+        b = self.box()
+        return QRectF(b.right() - width, b.bottom() + 5.0 / s, width, height)
 
     def export_paths(self) -> tuple[QPainterPath, QPainterPath | None]:
         """Géométrie non retournée dans le repère (0..w, 0..h), y vers le bas."""
@@ -444,6 +476,10 @@ class ShapeItem(TextOwner):
         if self.comments:
             m += 20
         r = r.adjusted(-m, -m, m, m)
+        data_rect = self.data_graphic_rect()
+        if not data_rect.isNull():
+            r = r.united(data_rect)
+            r = r.united(self.data_graphic_rect(1.0))
         if self.isSelected():
             s = self._scale()
             hs = HANDLE_PX / s
@@ -666,12 +702,56 @@ class ShapeItem(TextOwner):
             painter.drawPath(self._detail)
         sc = self.scene()
         exporting = sc is not None and sc.exporting
+        if self.data_graphic_text() and not getattr(widget, "is_overview", False):
+            self._paint_data_graphic(painter, exporting)
         if self.link and not exporting:
             self._paint_link_badge(painter)
         if self.comments and not exporting:
             self._paint_comment_badge(painter)
         if self.isSelected() and not exporting and not getattr(widget, "is_overview", False):
             self._paint_selection(painter)
+
+    def _paint_data_graphic(self, painter: QPainter, exporting: bool) -> None:
+        text = self.data_graphic_text()
+        if not text:
+            return
+        # Les exports suivent l'échelle du dessin ; à l'écran, la pastille garde une taille lisible.
+        s = 1.0 if exporting else painter_scale(painter)
+        rect = self.data_graphic_rect(s)
+        if rect.isNull():
+            return
+        display = self.data_graphic.get("display", "label_value")
+        if display == "status":
+            value = self.data.get(self.data_graphic.get("field", ""), "").strip().casefold()
+            value = "".join(c for c in unicodedata.normalize("NFKD", value)
+                            if not unicodedata.combining(c))
+            if value in {"done", "complete", "completed", "termine", "terminee", "success",
+                         "succeeded", "ok", "valide", "validee", "vert", "green"}:
+                fill, ink, border = "#e7f4e4", "#237a3b", "#9fcf9b"
+            elif value in {"blocked", "bloque", "late", "retard", "error", "failed", "echec",
+                           "critical", "critique", "urgent", "rouge", "red"}:
+                fill, ink, border = "#fde7e9", "#a4262c", "#e8a3a6"
+            elif value in {"in progress", "en cours", "pending", "en attente", "attention", "orange",
+                           "amber", "yellow", "jaune"}:
+                fill, ink, border = "#fff4ce", "#8a4b00", "#e5c66a"
+            else:
+                fill, ink, border = "#f3f4f6", "#374151", "#d1d5db"
+        else:
+            fill, ink, border = "#eff6ff", "#1e3a5f", "#bfdbfe"
+        font = QFont("Arial")
+        font.setPixelSize(max(1, round(11.0 / s)))
+        painter.save()
+        painter.setFont(font)
+        painter.setPen(QPen(QColor(border), 0.8 / s))
+        painter.setBrush(QColor(fill))
+        painter.drawRoundedRect(rect, 5.0 / s, 5.0 / s)
+        pad = 8.0 / s
+        text_rect = rect.adjusted(pad, 0, -pad, 0)
+        metrics = QFontMetricsF(font)
+        shown = metrics.elidedText(text, Qt.TextElideMode.ElideRight, max(1.0, text_rect.width()))
+        painter.setPen(QColor(ink))
+        painter.drawText(text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, shown)
+        painter.restore()
 
     def _paint_link_badge(self, painter: QPainter) -> None:
         s = painter_scale(painter)

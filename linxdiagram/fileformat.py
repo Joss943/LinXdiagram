@@ -238,6 +238,16 @@ def clean_data_link(raw) -> dict:
     return {"path": path, "source_key": source_key, "shape_key": shape_key, "fields": fields}
 
 
+def clean_data_graphic(raw) -> dict:
+    """Liaison d'une pastille visible à une propriété de forme."""
+    raw = _dict(raw)
+    field = _line(raw.get("field"), 100)
+    display = raw.get("display", "label_value")
+    if not field or not isinstance(display, str) or display not in {"label_value", "value", "status"}:
+        return {}
+    return {"field": field, "display": display}
+
+
 def clean_image(raw) -> str:
     if not isinstance(raw, str) or not raw:
         return ""
@@ -307,6 +317,9 @@ def clean_shape(raw, theme: str) -> dict | None:
     data_link = clean_data_link(raw.get("data_link"))
     if data_link:
         shape["data_link"] = data_link
+    data_graphic = clean_data_graphic(raw.get("data_graphic"))
+    if data_graphic:
+        shape["data_graphic"] = data_graphic
     if stencils.get(type_id).cff and isinstance(raw.get("cff"), dict):
         opts = {k: _bool(raw["cff"].get(k), d) for k, d in (("title", True), ("hidden", False),
                                                             ("rotate", False)) if k in raw["cff"]}

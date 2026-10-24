@@ -964,6 +964,11 @@ class ShapeDataPane(QWidget):
         self.link_status.setWordWrap(True)
         self.link_status.hide()
         lay.addWidget(self.link_status)
+        self.graphic_status = QLabel()
+        self.graphic_status.setObjectName("Hint")
+        self.graphic_status.setWordWrap(True)
+        self.graphic_status.hide()
+        lay.addWidget(self.graphic_status)
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["Propriété", "Valeur"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -997,6 +1002,12 @@ class ShapeDataPane(QWidget):
             key = linked.get("source_key", "")
             target = "texte de la forme" if linked.get("shape_key") == "__text__" else linked.get("shape_key", "")
             self.link_status.setText(f"CSV lié : {source} · {key} ↔ {target}")
+        graphic = it.data_graphic if it is not None else {}
+        self.graphic_status.setVisible(bool(graphic))
+        if graphic:
+            display = {"label_value": "étiquette et valeur", "value": "valeur seule",
+                       "status": "pastille de statut"}.get(graphic.get("display"), "graphique")
+            self.graphic_status.setText(f"Graphique de données : {graphic.get('field', '')} · {display}")
         if it is not None:
             for k, v in it.data.items():
                 r = self.table.rowCount()

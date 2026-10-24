@@ -287,6 +287,10 @@ class MainWindow(QMainWindow):
           self.refresh_linked_data, tip="Relit les fichiers CSV locaux associés aux formes.")
         A("data_unlink", "Dissocier la sélection", "data_visualizer", None,
           self.unlink_data, tip="Retire le lien CSV et conserve les données déjà importées.")
+        A("data_graphic", "Configurer un graphique de données…", "data_visualizer", None,
+          self.set_data_graphic, tip="Affiche une propriété de forme sous forme d'étiquette ou de pastille de statut.")
+        A("data_graphic_clear", "Supprimer le graphique de données", "data_visualizer", None,
+          self.clear_data_graphic)
         A("shape_report", "Rapports de forme…", "shape_report", None, self.shape_report,
           tip="Exporte la liste des formes et de leurs données (CSV).")
         A("subprocess", "Créer à partir de la sélection", "subprocess", None, self.create_subprocess,
@@ -736,6 +740,9 @@ class MainWindow(QMainWindow):
         g.large(a["data_link"])
         g.large(a["data_refresh"])
         g.large(a["data_unlink"])
+        data.addWidget(g)
+        g = RibbonGroup("Graphiques de données")
+        g.large(a["data_graphic"], menu=self._menu(a["data_graphic_clear"]))
         data.addWidget(g)
         g = RibbonGroup("Afficher/Masquer")
         g.column(self._check(a["pane_data"], "Fenêtre Données de forme"))
@@ -1245,6 +1252,10 @@ class MainWindow(QMainWindow):
             self.a[key].setEnabled(isinstance(single, ShapeItem))
         self.a["subprocess"].setEnabled(bool(shapes))
         self.a["data_unlink"].setEnabled(any(s.data_link for s in shapes))
+        editable_shapes = [s for s in shapes if not s.locked]
+        common_fields = set.intersection(*(set(s.data) for s in editable_shapes)) if editable_shapes else set()
+        self.a["data_graphic"].setEnabled(bool(common_fields))
+        self.a["data_graphic_clear"].setEnabled(any(s.data_graphic for s in editable_shapes))
         self.a["open_link"].setEnabled(isinstance(single, ShapeItem) and bool(single.link))
         self.a["delete_comment"].setEnabled(isinstance(single, ShapeItem) and bool(single.comments))
         self._updating_ui = True
@@ -1871,6 +1882,41 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{len(shapes)} lien(s) CSV retiré(s) ; les données importées sont conservées.",
                                      6000)
 
+    def set_data_graphic(self) -> None:
+        sc = self.scene()
+        shapes = [s for s in sc.selected_shapes() if not s.locked] if sc else []
+        if not shapes:
+            return
+        fields = set(shapes[0].data)
+        for shape in shapes[1:]:
+            fields.intersection_update(shape.data)
+        if not fields:
+            QMessageBox.information(self, "Graphique de données",
+                                    "Les formes sélectionnées doivent partager au moins une propriété.")
+            return
+        field, ok = QInputDialog.getItem(self, "Graphique de données", "Propriété à afficher :",
+                                         sorted(fields, key=str.casefold), 0, False)
+        if not ok:
+            return
+        displays = [("Étiquette et valeur", "label_value"), ("Valeur seule", "value"),
+                    ("Pastille de statut colorée", "status")]
+        display_label, ok = QInputDialog.getItem(self, "Graphique de données", "Présentation :",
+                                                 [label for label, _ in displays], 0, False)
+        if not ok:
+            return
+        display = next(value for label, value in displays if label == display_label)
+        config = {"field": field, "display": display}
+        sc.modify(shapes, lambda _it, state: state.__setitem__("data_graphic", config),
+                  "Configurer un graphique de données")
+
+    def clear_data_graphic(self) -> None:
+        sc = self.scene()
+        shapes = [s for s in sc.selected_shapes() if s.data_graphic and not s.locked] if sc else []
+        if not shapes:
+            return
+        sc.modify(shapes, lambda _it, state: state.pop("data_graphic", None),
+                  "Supprimer les graphiques de données")
+
     def shape_report(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Rapport de formes",
                                               os.path.join(self._last_dir(), "rapport-formes.csv"),
@@ -2300,6 +2346,10 @@ class MainWindow(QMainWindow):
                 data_menu.addAction(a["data_refresh"])
                 if single.data_link:
                     data_menu.addAction(a["data_unlink"])
+                data_menu.addSeparator()
+                data_menu.addAction(a["data_graphic"])
+                if single.data_graphic:
+                    data_menu.addAction(a["data_graphic_clear"])
                 data_menu.addAction(a["shapesheet"])
                 menu.addAction(a["lock"] if not single.locked else a["unlock"])
             if any(isinstance(i, ConnectorItem) for i in sel):
