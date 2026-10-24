@@ -273,8 +273,21 @@ def apply(app: QApplication, dark: bool) -> None:
     #BackstagePage {{ background: {t['surface']}; }}
     QLabel#BackstageTitle {{ font-size: 28px; font-weight: 300; color: {t['text']}; }}
     QLabel#BackstageSection {{ font-size: 15px; color: {t['text']}; }}
-    QToolButton#TemplateTile {{ border: 1px solid transparent; background: transparent; border-radius: 2px; }}
-    QToolButton#TemplateTile:hover {{ background: {t['hover']}; border-color: {t['border']}; }}
+    QLineEdit#TemplateSearch {{ min-height: 32px; padding-left: 10px; border-radius: 6px; }}
+    QLabel#TemplateCount {{ color: {t['text2']}; padding: 0 8px; }}
+    QLabel#TemplateIntro {{ color: {t['text2']}; font-size: 13px; padding-bottom: 3px; }}
+    QListWidget#TemplateCategories {{ background: {t['surface2']}; color: {t['text']}; border: 1px solid {t['border']};
+        border-radius: 7px; outline: 0; padding: 4px; }}
+    QListWidget#TemplateCategories::item {{ padding: 9px 10px; border-radius: 5px; }}
+    QListWidget#TemplateCategories::item:hover {{ background: {t['hover']}; }}
+    QListWidget#TemplateCategories::item:selected {{ color: {t['accent_line']}; background: {t['selection']};
+        font-weight: 600; }}
+    QScrollArea#TemplateResults {{ background: transparent; }}
+    QToolButton#TemplateTile {{ border: 1px solid {t['border']}; background: {t['surface']}; border-radius: 7px;
+        text-align: left; }}
+    QToolButton#TemplateTile:hover {{ background: {t['hover']}; border-color: {t['accent_line']}; }}
+    QLabel#TemplateTileTitle {{ color: {t['text']}; font-size: 12px; font-weight: 600; }}
+    QLabel#TemplateTileCategory {{ color: {t['text2']}; font-size: 10px; }}
     QTreeWidget#RecentList {{ border: none; background: {t['surface']}; }}
     QTreeWidget#RecentList::item {{ padding: 6px 2px; }}
     QTreeWidget#RecentList::item:hover {{ background: {t['hover']}; }}

@@ -2580,7 +2580,7 @@ class MainWindow(QMainWindow):
     def new_from_template(self, template: str) -> None:
         data = templates.build(template)
         doc = Document(data)
-        hint = "Exemple" if template == "sample" else None
+        hint = None
         if self.is_pristine():
             self.title_hint = hint
             self.set_document(doc)
