@@ -20,7 +20,7 @@ FONT_UI = "Inter"
 LIGHT = {
     "accent": "#0078d4", "accent_hover": "#106ebe", "accent_pressed": "#005a9e",
     "accent_text": "#ffffff", "accent_soft": "#deecf9", "accent_line": "#0078d4",
-    "titlebar": "#31549a", "tabbar": "#fafbfc", "tab_text": "#ffffff", "tab_ink": "#242424",
+    "titlebar": "#0f6cbd", "tabbar": "#f7f9fc", "tab_text": "#ffffff", "tab_ink": "#242424",
     "ribbon": "#ffffff", "ribbon_border": "#e0e0e0", "separator": "#e0e0e0",
     "window": "#f4f6f8", "surface": "#ffffff", "surface2": "#f7f9fb",
     "text": "#242424", "text2": "#616161", "text3": "#a8a8a8",
@@ -116,27 +116,27 @@ def apply(app: QApplication, dark: bool) -> None:
                padding: 6px 8px; }}
 
     /* ---------- barre de titre et onglets ---------- */
-    #TitleBar {{ background: {t['titlebar']}; }}
-    #TitleBar QLabel#Title {{ color: {t['tab_text']}; font-size: 12px; }}
-    #TitleBar QToolButton {{ background: transparent; border: none; border-radius: 0; padding: 4px; }}
-    #TitleBar QToolButton:hover {{ background: {t['accent_hover']}; }}
-    #TitleBar QToolButton:pressed {{ background: {t['accent_pressed']}; }}
+    #TitleBar {{ background: {t['titlebar']}; border-bottom: 1px solid rgba(0,0,0,0.12); }}
+    #TitleBar QLabel#Title {{ color: {t['tab_text']}; font-size: 12px; font-weight: 600; }}
+    #TitleBar QToolButton {{ background: transparent; border: none; border-radius: 4px; padding: 4px; }}
+    #TitleBar QToolButton:hover {{ background: rgba(255,255,255,0.14); }}
+    #TitleBar QToolButton:pressed {{ background: rgba(0,0,0,0.16); }}
     #TitleBar QToolButton#WinClose:hover {{ background: {t['close_hover']}; }}
     #TitleBar QToolButton::menu-button {{ border: none; background: transparent; width: 12px; }}
-    #TitleBar QToolButton::menu-button:hover {{ background: {t['accent_hover']}; }}
+    #TitleBar QToolButton::menu-button:hover {{ background: rgba(255,255,255,0.14); }}
     #TitleBar QToolButton::menu-arrow {{ image: url({a['down_light']}); width: 8px; height: 8px; }}
     #TitleBar QLineEdit#CommandSearch {{ background: rgba(255,255,255,0.18); border: 1px solid transparent;
-        border-radius: 4px; color: {t['tab_text']}; padding: 3px 8px; min-height: 18px; }}
+        border-radius: 7px; color: {t['tab_text']}; padding: 3px 10px; min-height: 20px; }}
     #TitleBar QLineEdit#CommandSearch:focus {{ background: {t['surface']}; color: {t['text']};
         border: 1px solid {t['accent']}; }}
-    #RibbonTabBar {{ background: {t['tabbar']}; }}
+    #RibbonTabBar {{ background: {t['tabbar']}; border-bottom: 1px solid {t['border']}; }}
     QPushButton#RibbonTab {{ color: {t['tab_ink']}; background: transparent; border: none;
-        border-bottom: 3px solid transparent; border-radius: 0; padding: 6px 10px 3px 10px; font-size: 12px;
-        margin: 2px 1px 0 1px; }}
+        border-bottom: 3px solid transparent; border-radius: 0; padding: 7px 11px 4px 11px; font-size: 12px;
+        margin: 0 1px; }}
     QPushButton#RibbonTab:hover {{ background: {t['pressed'] if not dark else t['hover']};
-        border-top-left-radius: 4px; border-top-right-radius: 4px; }}
-    QPushButton#RibbonTab:checked {{ color: {t['accent_line']}; border-bottom: 3px solid {t['accent_line']};
-        font-weight: 600; }}
+        border-top-left-radius: 5px; border-top-right-radius: 5px; }}
+    QPushButton#RibbonTab:checked {{ color: {t['accent_line']}; background: {t['surface']};
+        border-bottom: 3px solid {t['accent_line']}; font-weight: 600; }}
     QPushButton#FileTab {{ color: {file_tab_ink}; background: {t['accent']}; border: none; border-radius: 3px;
         padding: 6px 12px; font-size: 12px; font-weight: 600; margin: 2px 1px 0 6px; }}
     QPushButton#FileTab:hover {{ background: {file_tab_hover}; }}
@@ -146,7 +146,7 @@ def apply(app: QApplication, dark: bool) -> None:
 
     /* ---------- ruban : carte blanche arrondie ---------- */
     #RibbonBody {{ background: {t['window']}; }}
-    #RibbonCard {{ background: {t['ribbon']}; border: 1px solid {t['ribbon_border']}; border-radius: 8px; }}
+    #RibbonCard {{ background: {t['ribbon']}; border: 1px solid {t['ribbon_border']}; border-radius: 6px; }}
     QMenu#RibbonGroupPopup {{ background: {t['ribbon']}; border-radius: 6px; padding: 4px; }}
     QLabel#RibbonGroupLabel {{ color: {t['text2']}; font-size: 11px; }}
     QFrame#RibbonSep {{ background: {t['separator']}; max-width: 1px; min-width: 1px; }}
@@ -245,15 +245,17 @@ def apply(app: QApplication, dark: bool) -> None:
     QSplitter::handle:vertical {{ height: 1px; }}
 
     /* ---------- pages et barre d'état ---------- */
-    #PageBar {{ background: {t['window']}; border-top: 1px solid {t['border']}; }}
+    #PageBar {{ background: {t['surface2']}; border-top: 1px solid {t['border']}; }}
     #PageBar QToolButton {{ border: none; background: transparent; padding: 3px; }}
     #PageBar QToolButton:hover {{ background: {t['hover']}; }}
     QTabBar#PageTabs::tab {{ background: transparent; color: {t['text']}; border: none;
-        border-right: 1px solid {t['border']}; padding: 4px 14px; min-width: 40px; }}
+        border-right: 1px solid {t['border']}; border-top-left-radius: 4px; border-top-right-radius: 4px;
+        padding: 5px 14px; min-width: 40px; }}
     QTabBar#PageTabs::tab:hover {{ background: {t['hover']}; }}
     QTabBar#PageTabs::tab:selected {{ background: {t['surface']}; color: {t['accent_line']};
         font-weight: 600; border-bottom: 2px solid {t['accent_line']}; }}
-    QStatusBar {{ background: {t['window']}; color: {t['text2']}; border-top: 1px solid {t['border']}; }}
+    QStatusBar {{ background: {t['surface2']}; color: {t['text2']}; border-top: 1px solid {t['border']};
+        min-height: 26px; }}
     QStatusBar QLabel {{ color: {t['text2']}; padding: 0 8px; }}
     QStatusBar QToolButton {{ border: none; background: transparent; padding: 2px; }}
     QStatusBar QToolButton:hover {{ background: {t['hover']}; }}

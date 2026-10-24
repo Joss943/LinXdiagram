@@ -554,6 +554,7 @@ class Ribbon(QWidget):
         self.tabbar = QWidget()
         self.tabbar.setObjectName("RibbonTabBar")
         self.tabbar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.tabbar.setFixedHeight(36)
         tl = QHBoxLayout(self.tabbar)
         tl.setContentsMargins(0, 0, 6, 0)
         tl.setSpacing(0)

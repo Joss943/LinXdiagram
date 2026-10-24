@@ -469,7 +469,7 @@ class MainWindow(QMainWindow):
         bar = QWidget()
         bar.setObjectName("PageBar")
         bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        bar.setFixedHeight(28)
+        bar.setFixedHeight(32)
         bl = QHBoxLayout(bar)
         bl.setContentsMargins(4, 0, 4, 0)
         bl.setSpacing(0)
