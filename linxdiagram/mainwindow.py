@@ -2578,7 +2578,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, APP_NAME, f"{n} fichier(s) de récupération supprimé(s).")
 
     def new_from_template(self, template: str) -> None:
-        data = templates.build(template)
+        data = templates.build_blank(template)
         doc = Document(data)
         hint = None
         if self.is_pristine():

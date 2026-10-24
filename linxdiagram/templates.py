@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from . import fileformat, stencils
-from .units import PAGE_SIZES, mm_to_px
+from . import fileformat, stencils, swimlanes
+from .units import (PAGE_SIZES, connector_style, connector_text_style, mm_to_px)
 
 # Catégorie Visio de l'écran Nouveau, gabarit ouvert dans le volet Formes,
 # mode de connexion et orientation. Les dessins créés restent vides.
@@ -206,13 +206,48 @@ def template_info(key: str) -> tuple[str, str, str]:
     return TEMPLATE_INFO.get(key, ("Général", "Page vierge avec les formes générales.", "vide nouveau"))
 
 
-def build(template: str) -> dict:
-    """Crée une page vierge avec les préférences adaptées au type choisi."""
+def _shape(sid: str, type_id: str, x_mm: float, y_mm: float, text: str, z: int) -> dict:
+    style, text_style = fileformat.default_shape_styles(type_id, "office")
+    shape = stencils.get(type_id)
+    return {"id": sid, "type": type_id, "x": mm_to_px(x_mm), "y": mm_to_px(y_mm),
+            "w": mm_to_px(shape.size_mm[0] + 10), "h": mm_to_px(shape.size_mm[1] + 2),
+            "rotation": 0.0, "flip_h": False, "flip_v": False, "z": float(z), "text": text,
+            "style": style, "text_style": text_style, "data": {}, "link": "", "group": ""}
+
+
+def _conn(cid: str, source: str, target: str, z: int, text: str = "") -> dict:
+    return {"id": cid, "kind": "connector",
+            "src": {"shape": source, "port": -1, "x": 0, "y": 0},
+            "dst": {"shape": target, "port": -1, "x": 0, "y": 0},
+            "z": float(z), "text": text,
+            "style": connector_style("office", "orthogonal"),
+            "text_style": connector_text_style("office"), "data": {}}
+
+
+def _cff_frame() -> list[dict]:
+    out = []
+    parts = swimlanes.new_structure("h", mm_to_px(15), mm_to_px(15), 3,
+                                    mm_to_px(265), mm_to_px(48))
+    for n, (role, type_id, box) in enumerate(parts):
+        shape = _shape(f"cff{n}", type_id, 0, 0,
+                       "Titre du diagramme" if role == "frame" else "Fonction", 0)
+        shape.update(x=box.cx, y=box.cy, w=box.w, h=box.h,
+                     z=swimlanes.Z_FRAME if role == "frame" else swimlanes.Z_LANE + n)
+        out.append(shape)
+    return out
+
+
+def build_blank(template: str) -> dict:
+    """Crée un diagramme vide avec la palette et la page adaptées."""
     palette, route, landscape = TEMPLATE_SETUP.get(template, TEMPLATE_SETUP["blank"])
     page = fileformat.default_page("Page-1")
     if landscape:
         width, height = PAGE_SIZES["A4"]
         page["width"], page["height"] = mm_to_px(height), mm_to_px(width)
+    # Les couloirs vides sont la structure du gabarit interfonctionnel, sans
+    # tâches ni flux préremplis.
+    if palette == stencils.CFF:
+        page["shapes"] = _cff_frame()
     title = next((name for key, name in TEMPLATES if key == template), "Dessin vierge")
     raw = {
         "format": fileformat.FORMAT,
@@ -225,13 +260,53 @@ def build(template: str) -> dict:
     return clean
 
 
+def _sample_fixture() -> dict:
+    """Dessin de test interne, exclu du catalogue et de l'interface Nouveau."""
+    page = fileformat.default_page("Page-1")
+    doc = {"settings": {"route": "orthogonal", "theme": "office"},
+           "properties": {"title": "Traitement d'une commande"}, "pages": [page]}
+    rows = [
+        ("title", "basic.title", 105, 22, "Traitement d'une commande"),
+        ("s1", "flow.terminator", 105, 45, "Commande reçue"),
+        ("s2", "flow.process", 105, 75, "Vérifier le stock"),
+        ("s3", "flow.decision", 105, 110, "Article en stock ?"),
+        ("s4", "flow.process", 105, 148, "Préparer le colis"),
+        ("s5", "flow.process", 165, 110, "Commander au fournisseur"),
+        ("s6", "flow.data", 45, 148, "Facture"),
+        ("s7", "flow.process", 105, 183, "Expédier"),
+        ("s8", "flow.terminator", 105, 215, "Commande livrée"),
+        ("note", "basic.note", 165, 160, "Astuce : déplacez une forme,\nles connecteurs suivent."),
+    ]
+    page["shapes"] = [_shape(sid, type_id, x, y, text, n)
+                       for n, (sid, type_id, x, y, text) in enumerate(rows)]
+    page["shapes"][0]["w"] = mm_to_px(150)
+    page["shapes"][-1]["w"], page["shapes"][-1]["h"] = mm_to_px(48), mm_to_px(22)
+    page["shapes"][-1]["text_style"]["size"] = 9.0
+    page["shapes"][6]["data"] = {"Montant": "149,90 €", "TVA": "20 %"}
+    links = [("s1", "s2", ""), ("s2", "s3", ""), ("s3", "s4", "Oui"),
+             ("s3", "s5", "Non"), ("s5", "s2", ""), ("s4", "s6", ""),
+             ("s4", "s7", ""), ("s7", "s8", "")]
+    page["connectors"] = [_conn(f"c{n}", source, target, 100 + n, label)
+                           for n, (source, target, label) in enumerate(links)]
+    clean, _warnings = fileformat.validate_document(
+        {"format": fileformat.FORMAT, "version": fileformat.VERSION, **doc})
+    return clean
+
+
+def build(template: str) -> dict:
+    """Compatibilité des fixtures internes ; les modèles UI utilisent build_blank()."""
+    if template == "sample":
+        return _sample_fixture()
+    return build_blank(template)
+
+
 def category_for(template: str) -> str:
     return TEMPLATE_SETUP.get(template, TEMPLATE_SETUP["blank"])[0]
 
 
 def preview(template: str) -> dict:
     """L'aperçu est une page vide, jamais un diagramme d'exemple."""
-    return build(template)
+    return build_blank(template)
 
 
 @lru_cache(maxsize=128)

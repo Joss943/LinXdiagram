@@ -7,7 +7,6 @@ import datetime
 import os
 import time
 import unicodedata
-import unicodedata
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtPrintSupport import QPrinter, QPrinterInfo, QPrintPreviewWidget
@@ -158,6 +157,8 @@ class Backstage(QWidget):
             self.commandRequested.emit(key)
 
     def select(self, key: str) -> None:
+        if key == "new" and not self._templates_ready:
+            self._refresh_templates()
         if key == "print":
             if not self._print_built:
                 self._print_built = True
@@ -261,14 +262,16 @@ class Backstage(QWidget):
         content.addWidget(self.template_results, 1)
         lay.addLayout(content, 1)
 
+        self.template_categories.setCurrentRow(0)
+        self._templates_ready = False
         self.template_categories.currentItemChanged.connect(lambda *_: self._refresh_templates())
         self.template_search.textChanged.connect(lambda *_: self._refresh_templates())
-        self.template_categories.setCurrentRow(0)
         return area
 
     def _refresh_templates(self) -> None:
         if not hasattr(self, "template_grid"):
             return
+        self._templates_ready = True
         selected = self.template_categories.currentItem()
         category = selected.data(Qt.ItemDataRole.UserRole) if selected else templates.TEMPLATE_CATEGORIES[0]
         fold = lambda text: "".join(
