@@ -75,14 +75,51 @@ def _csv_safe_cell(value: str) -> str:
     return "'" + value if value[index:index + 1] in ("=", "+", "-", "@") else value
 
 
-def _merge_linked_data(existing: dict, old_fields: list[str], headers: list[str], row: list[str]) -> tuple[dict, int]:
-    incoming = {header: row[i] if i < len(row) else "" for i, header in enumerate(headers)}
+def _merge_linked_data(existing: dict, old_fields: list[str], headers: list[str], row: list[str],
+                       field_map: dict[str, str] | None = None) -> tuple[dict, int]:
+    field_map = field_map or {header: header for header in headers}
+    incoming = {field_map[header]: row[i] if i < len(row) else ""
+                for i, header in enumerate(headers) if header in field_map}
     old = set(old_fields)
     manual = [(key, value) for key, value in existing.items() if key not in old and key not in incoming]
     room = max(0, fileformat.MAX_DATA_FIELDS - len(incoming))
     kept = manual[:room]
     # Les champs du CSV ont priorité, les propriétés manuelles restantes sont conservées si possible.
     return {**incoming, **dict(kept)}, len(manual) - len(kept)
+
+
+def _data_link_identity(link: dict) -> tuple[str, str, str]:
+    return os.path.normcase(os.path.normpath(link.get("path", ""))), link.get("source_key", ""), \
+        link.get("shape_key", "")
+
+
+def _data_link_field_map(shape: ShapeItem, path: str, headers: list[str], old_link: dict | None,
+                        existing_data: dict | None = None, source_key: str = "") -> dict[str, str]:
+    """Donne aux colonnes CSV un nom unique sans écraser les données d'autres sources."""
+    old_link = old_link or {}
+    old_fields = set(old_link.get("fields", []))
+    reserved = set(shape.data if existing_data is None else existing_data) - old_fields
+    old_map = old_link.get("field_map", {})
+    stem = os.path.splitext(os.path.basename(path))[0] or "CSV"
+    out: dict[str, str] = {}
+    limit = max(0, fileformat.MAX_DATA_FIELDS - len(reserved))
+    selected = list(headers[:limit])
+    source_key = old_link.get("source_key", source_key)
+    if source_key in headers and source_key not in selected and limit:
+        selected[-1] = source_key
+    for header in selected:
+        target = old_map.get(header)
+        if not target or target in reserved:
+            base = header if header not in reserved else security.clean_line(f"{stem} · {header}", 100)
+            target = base or "Donnée CSV"
+            suffix_index = 2
+            while target in reserved:
+                suffix = f" ({suffix_index})"
+                target = security.clean_line(base[:100 - len(suffix)] + suffix, 100)
+                suffix_index += 1
+        out[header] = target
+        reserved.add(target)
+    return out
 
 
 class MainWindow(QMainWindow):
@@ -299,7 +336,7 @@ class MainWindow(QMainWindow):
         A("data_flow", "Diagramme de flux à partir de données…", "data_visualizer", None,
           lambda: self.create_from_data("flow"))
         A("data_link", "Lier les formes à un fichier CSV…", "data_visualizer", None,
-          self.link_data, tip="Associe les formes à des lignes d'un fichier CSV local.")
+          self.link_data, tip="Ajoute une source CSV locale sans écraser les autres liens.")
         A("data_refresh", "Actualiser les données liées", "data_visualizer", None,
           self.refresh_linked_data, tip="Relit les fichiers CSV locaux associés aux formes.")
         A("data_unlink", "Dissocier la sélection", "data_visualizer", None,
@@ -1268,7 +1305,7 @@ class MainWindow(QMainWindow):
         for key in ("shapesheet", "link", "screentip", "new_comment"):
             self.a[key].setEnabled(isinstance(single, ShapeItem))
         self.a["subprocess"].setEnabled(bool(shapes))
-        self.a["data_unlink"].setEnabled(any(s.data_link for s in shapes))
+        self.a["data_unlink"].setEnabled(any(s.data_links for s in shapes))
         editable_shapes = [s for s in shapes if not s.locked]
         common_fields = set.intersection(*(set(s.data) for s in editable_shapes)) if editable_shapes else set()
         self.a["data_graphic"].setEnabled(bool(common_fields))
@@ -1782,53 +1819,98 @@ class MainWindow(QMainWindow):
         source_key, shape_key = dlg.mapping()
         source_index = headers.index(source_key)
         row_by_key: dict[str, list[str]] = {}
+        duplicate = False
         for row in rows:
             value = row[source_index].strip() if source_index < len(row) else ""
             if value:
+                if value in row_by_key:
+                    duplicate = True
+                    break
                 row_by_key[value] = row
+        if duplicate:
+            self._plain_message(QMessageBox.Icon.Warning, "Lier les données",
+                                f"La colonne « {source_key} » contient des clés en double.")
+            return
+
         def shape_value(shape):
             return shape.text.strip() if shape_key == "__text__" else str(shape.data.get(shape_key, "")).strip()
+
         matched = [shape for shape in candidates if shape_value(shape) in row_by_key and shape_value(shape)]
         if not matched:
             QMessageBox.information(self, "Lier les données", "Aucune forme ne correspond à cette clé.")
             return
-        linked_fields = list(headers)
-        link = {"path": os.path.abspath(path), "source_key": source_key,
-                "shape_key": shape_key, "fields": linked_fields}
+        link_path = os.path.abspath(path)
+        identity = (os.path.normcase(os.path.normpath(link_path)), source_key, shape_key)
         omitted = 0
-        updates: dict[str, tuple[dict, dict]] = {}
+        skipped_sources = skipped_capacity = 0
+        skipped_fields = 0
+        updates: dict[str, tuple[dict, list[dict]]] = {}
         for shape in matched:
+            links = [dict(link, fields=list(link.get("fields", [])),
+                          field_map=dict(link.get("field_map", {}))) for link in shape.data_links]
+            old_index = next((i for i, link in enumerate(links)
+                              if _data_link_identity(link) == identity), None)
+            old_link = links[old_index] if old_index is not None else None
+            if old_link is None and len(links) >= fileformat.MAX_DATA_LINKS_PER_SHAPE:
+                skipped_sources += 1
+                continue
+            field_map = _data_link_field_map(shape, link_path, headers, old_link, source_key=source_key)
+            if not field_map:
+                skipped_capacity += 1
+                continue
+            skipped_fields += len(headers) - len(field_map)
+            linked_fields = list(field_map.values())
             row = row_by_key[shape_value(shape)]
-            old_fields = shape.data_link.get("fields", [])
-            data, removed = _merge_linked_data(shape.data, old_fields, linked_fields, row)
+            data, removed = _merge_linked_data(shape.data, old_link.get("fields", []) if old_link else [],
+                                               headers, row, field_map)
             omitted += removed
-            updates[shape.id] = (data, link)
+            link = {"path": link_path, "source_key": source_key, "shape_key": shape_key,
+                    "fields": linked_fields, "field_map": field_map}
+            if old_index is None:
+                links.append(link)
+            else:
+                links[old_index] = link
+            updates[shape.id] = (data, links)
+
+        if not updates:
+            reason = (f"Limite de {fileformat.MAX_DATA_LINKS_PER_SHAPE} sources CSV par forme atteinte."
+                      if skipped_sources else
+                      f"Limite de {fileformat.MAX_DATA_FIELDS} propriétés de données par forme atteinte.")
+            QMessageBox.information(self, "Lier les données", reason)
+            return
 
         def update(_it, state):
-            state["data"], state["data_link"] = updates[_it.id]
-        sc.modify(matched, update, "Lier les données CSV")
+            state["data"], state["data_links"] = updates[_it.id]
+        sc.modify([shape for shape in matched if shape.id in updates], update, "Lier les données CSV")
         self.show_pane("data")
-        msg = f"{len(matched)} forme(s) liée(s) à {os.path.basename(path)}."
+        msg = f"{len(updates)} forme(s) liée(s) à {os.path.basename(path)}."
+        if skipped_sources:
+            msg += f" {skipped_sources} forme(s) ignorée(s), limite de {fileformat.MAX_DATA_LINKS_PER_SHAPE} sources par forme."
+        if skipped_capacity:
+            msg += f" {skipped_capacity} forme(s) ignorée(s), limite de {fileformat.MAX_DATA_FIELDS} propriétés de données par forme."
+        if skipped_fields:
+            msg += f" {skipped_fields} colonne(s) CSV ignorée(s), limite de {fileformat.MAX_DATA_FIELDS} données par forme."
         if omitted:
             msg += f" {omitted} propriété(s) manuelle(s) retirée(s), limite de {fileformat.MAX_DATA_FIELDS} champs par forme."
         self.statusBar().showMessage(msg, 8000)
 
     def refresh_linked_data(self) -> None:
-        groups: dict[tuple[str, str, str], list[tuple[object, ShapeItem]]] = {}
+        groups: dict[tuple[str, str, str], list[tuple[object, ShapeItem, dict]]] = {}
         for page in self.doc.pages:
             for shape in page.shapes():
-                link = shape.data_link
-                if link:
+                for link in shape.data_links:
                     key = (link.get("path", ""), link.get("source_key", ""), link.get("shape_key", ""))
-                    groups.setdefault(key, []).append((page, shape))
+                    groups.setdefault(key, []).append((page, shape, link))
         if not groups:
             QMessageBox.information(self, "Actualiser les données", "Aucune forme n'est liée à un fichier CSV.")
             return
 
         parsed: dict[str, tuple[list[str], list[list[str]]]] = {}
         errors: list[str] = []
-        updates_by_page: dict[object, dict[str, tuple[dict, dict]]] = {}
-        updated = unmatched = omitted = 0
+        updates_by_page: dict[object, dict[str, tuple[dict, list[dict]]]] = {}
+        working: dict[tuple[object, str], tuple[dict, list[dict]]] = {}
+        updated_shapes: set[tuple[object, str]] = set()
+        unmatched = omitted = skipped_fields = 0
         for (path, source_key, shape_key), entries in groups.items():
             if path not in parsed:
                 try:
@@ -1857,46 +1939,117 @@ class MainWindow(QMainWindow):
             if duplicate:
                 errors.append(f"{os.path.basename(path)} : la colonne « {source_key} » contient des clés en double.")
                 continue
-            for page, shape in entries:
-                value = shape.text.strip() if shape_key == "__text__" else str(shape.data.get(shape_key, "")).strip()
+            for page, shape, original_link in entries:
+                token = (page, shape.id)
+                current_data, current_links = working.get(token, (shape.data, shape.data_links))
+                value = shape.text.strip() if shape_key == "__text__" else str(current_data.get(shape_key, "")).strip()
                 row = row_by_key.get(value) if value else None
                 if row is None:
                     unmatched += 1
                     continue
-                data, removed = _merge_linked_data(shape.data, shape.data_link.get("fields", []), headers, row)
-                link = dict(shape.data_link, fields=list(headers))
-                updates_by_page.setdefault(page, {})[shape.id] = (data, link)
-                updated += 1
+                links = [dict(link, fields=list(link.get("fields", [])),
+                              field_map=dict(link.get("field_map", {}))) for link in current_links]
+                identity = _data_link_identity(original_link)
+                link_index = next((i for i, link in enumerate(links)
+                                   if _data_link_identity(link) == identity), None)
+                if link_index is None:
+                    errors.append(f"{os.path.basename(path)} : liaison devenue indisponible pour une forme.")
+                    continue
+                old_link = links[link_index]
+                field_map = _data_link_field_map(shape, path, headers, old_link, current_data)
+                if not field_map:
+                    errors.append(f"{os.path.basename(path)} : aucune colonne disponible pour actualiser une forme.")
+                    continue
+                skipped_fields += len(headers) - len(field_map)
+                data, removed = _merge_linked_data(current_data, old_link.get("fields", []), headers, row,
+                                                   field_map)
+                links[link_index] = dict(old_link, fields=list(field_map.values()), field_map=field_map)
+                working[token] = (data, links)
+                updated_shapes.add(token)
                 omitted += removed
 
+        for (page, shape_id), values in working.items():
+            updates_by_page.setdefault(page, {})[shape_id] = values
         if updates_by_page:
             self.doc.undo_stack.beginMacro("Actualiser les données liées")
             for page, updates in updates_by_page.items():
                 def update(_it, state, values=updates):
-                    state["data"], state["data_link"] = values[_it.id]
+                    state["data"], state["data_links"] = values[_it.id]
                 page.modify([page.item_by_id(item_id) for item_id in updates], update,
                             "Actualiser les données CSV")
             self.doc.undo_stack.endMacro()
-        msg = f"{updated} forme(s) actualisée(s)."
+        msg = f"{len(updated_shapes)} forme(s) actualisée(s)."
         if unmatched:
             msg += f" {unmatched} forme(s) sans ligne correspondante ont gardé leurs anciennes données."
         if omitted:
             msg += f" {omitted} propriété(s) manuelle(s) retirée(s) pour respecter la limite de champs."
+        if skipped_fields:
+            msg += f" {skipped_fields} colonne(s) CSV ignorée(s), limite de {fileformat.MAX_DATA_FIELDS} données par forme."
         if errors:
             msg += "\n\n" + "\n".join(dict.fromkeys(errors))
             self._plain_message(QMessageBox.Icon.Warning, "Actualisation des données", msg)
-        elif updated:
+        elif updated_shapes:
             self.statusBar().showMessage(msg, 8000)
         else:
             self._plain_message(QMessageBox.Icon.Information, "Actualisation des données", msg)
 
     def unlink_data(self) -> None:
         sc = self.scene()
-        shapes = [s for s in sc.selected_shapes() if s.data_link and not s.locked] if sc else []
+        shapes = [s for s in sc.selected_shapes() if s.data_links and not s.locked] if sc else []
         if not shapes:
             return
-        sc.modify(shapes, lambda _it, state: state.pop("data_link", None), "Dissocier les données CSV")
-        self.statusBar().showMessage(f"{len(shapes)} lien(s) CSV retiré(s) ; les données importées sont conservées.",
+        relations: dict[tuple[str, str, str], str] = {}
+        used_labels: set[str] = set()
+        for shape in shapes:
+            for link in shape.data_links:
+                identity = _data_link_identity(link)
+                if identity in relations:
+                    continue
+                path = link.get("path", "")
+                source = os.path.basename(path) or "fichier local"
+                target = "texte" if link.get("shape_key") == "__text__" else link.get("shape_key", "")
+                label = f"{source} · {link.get('source_key', '')} ↔ {target}"
+                if label in used_labels:
+                    label = f"{label} — {os.path.dirname(path) or path}"
+                    suffix_index = 2
+                    base_label = label
+                    while label in used_labels:
+                        label = f"{base_label} ({suffix_index})"
+                        suffix_index += 1
+                used_labels.add(label)
+                relations[identity] = label
+        all_label = "— Tous les liens CSV —"
+        choices = list(relations.values())
+        if len(choices) > 1:
+            choices.insert(0, all_label)
+        if len(choices) == 1:
+            selected = choices[0]
+        else:
+            selected, ok = QInputDialog.getItem(self, "Dissocier les données", "Source à dissocier :",
+                                                choices, 0, False)
+            if not ok:
+                return
+        selected_id = next((identity for identity, label in relations.items() if label == selected), None)
+        targets = [shape for shape in shapes if selected == all_label or
+                   any(_data_link_identity(link) == selected_id for link in shape.data_links)]
+        removed = 0
+
+        def update(_it, state):
+            nonlocal removed
+            links = state.get("data_links", [])
+            if selected == all_label:
+                removed += len(links)
+                state.pop("data_links", None)
+            else:
+                kept = [link for link in links if _data_link_identity(link) != selected_id]
+                removed += len(links) - len(kept)
+                if kept:
+                    state["data_links"] = kept
+                else:
+                    state.pop("data_links", None)
+
+        sc.modify(targets, update, "Dissocier les données CSV")
+        self.statusBar().showMessage(f"{removed} lien(s) CSV retiré(s) ; les données importées sont conservées.",
                                      6000)
 
     def set_data_graphic(self) -> None:
@@ -2355,7 +2508,7 @@ class MainWindow(QMainWindow):
                                     lambda: self.show_pane("data"))
                 data_menu.addAction(a["data_link"])
                 data_menu.addAction(a["data_refresh"])
-                if single.data_link:
+                if single.data_links:
                     data_menu.addAction(a["data_unlink"])
                 data_menu.addSeparator()
                 data_menu.addAction(a["data_graphic"])

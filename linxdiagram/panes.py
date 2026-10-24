@@ -997,13 +997,16 @@ class ShapeDataPane(QWidget):
         self.table.setRowCount(0)
         self.table.setEnabled(it is not None)
         self.hint.setVisible(it is None)
-        linked = it.data_link if it is not None else {}
+        linked = it.data_links if it is not None else []
         self.link_status.setVisible(bool(linked))
         if linked:
-            source = os.path.basename(linked.get("path", "")) or "fichier local"
-            key = linked.get("source_key", "")
-            target = "texte de la forme" if linked.get("shape_key") == "__text__" else linked.get("shape_key", "")
-            self.link_status.setText(f"CSV lié : {source} · {key} ↔ {target}")
+            lines = []
+            for link in linked:
+                source = os.path.basename(link.get("path", "")) or "fichier local"
+                key = link.get("source_key", "")
+                target = "texte de la forme" if link.get("shape_key") == "__text__" else link.get("shape_key", "")
+                lines.append(f"CSV lié : {source} · {key} ↔ {target}")
+            self.link_status.setText("\n".join(lines))
         graphic = it.data_graphic if it is not None else {}
         self.graphic_status.setVisible(bool(graphic))
         if graphic:

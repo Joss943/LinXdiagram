@@ -37,6 +37,7 @@ MAX_ITEMS_PER_PAGE = 50_000
 MAX_ITEMS_TOTAL = 200_000
 MAX_TEXT = 20_000
 MAX_DATA_FIELDS = 100
+MAX_DATA_LINKS_PER_SHAPE = 10
 MAX_IMAGE_BYTES = 16 * 1024 * 1024
 MAX_PATH_COMMANDS = 20_000
 
@@ -223,20 +224,67 @@ def clean_data_link(raw) -> dict:
     shape_key = _line(raw.get("shape_key"), 100)
     if not source_key or not shape_key:
         return {}
-    fields: list[str] = []
-    seen: set[str] = set()
-    source_fields = raw.get("fields")
-    if isinstance(source_fields, list):
-        for field in source_fields[:MAX_DATA_FIELDS]:
-            field = _line(field, 100)
-            if field and field not in seen:
-                fields.append(field)
-                seen.add(field)
-    if source_key not in seen:
-        if len(fields) >= MAX_DATA_FIELDS:
-            fields = fields[:MAX_DATA_FIELDS - 1]
-        fields.insert(0, source_key)
-    return {"path": path, "source_key": source_key, "shape_key": shape_key, "fields": fields}
+    field_map: dict[str, str] = {}
+    targets: set[str] = set()
+    raw_map = raw.get("field_map")
+    if isinstance(raw_map, dict):
+        for index, (source, target) in enumerate(raw_map.items()):
+            if index >= MAX_DATA_FIELDS:
+                break
+            source = _line(source, 100)
+            target = _line(target, 100)
+            if source and target and source not in field_map and target not in targets:
+                field_map[source] = target
+                targets.add(target)
+    else:
+        source_fields = raw.get("fields")
+        if isinstance(source_fields, list):
+            for field in source_fields[:MAX_DATA_FIELDS]:
+                field = _line(field, 100)
+                if field and field not in field_map:
+                    field_map[field] = field
+                    targets.add(field)
+    if source_key not in field_map:
+        if len(field_map) >= MAX_DATA_FIELDS:
+            return {}
+        target = source_key
+        if target in targets:
+            return {}
+        field_map[source_key] = target
+        targets.add(target)
+    fields = list(field_map.values())
+    return {"path": path, "source_key": source_key, "shape_key": shape_key,
+            "fields": fields, "field_map": field_map}
+
+
+def clean_data_links(raw, legacy=None) -> list[dict]:
+    """Charge plusieurs sources locales et migre l'ancien lien unique si nécessaire."""
+    candidates = raw[:MAX_DATA_LINKS_PER_SHAPE] if isinstance(raw, list) else []
+    if isinstance(legacy, dict):
+        candidates.append(legacy)
+    out, seen, used_fields = [], set(), set()
+    for candidate in candidates:
+        link = clean_data_link(candidate)
+        if not link:
+            continue
+        key = (os.path.normcase(link["path"]), link["source_key"], link["shape_key"])
+        if key in seen:
+            continue
+        mapping = {}
+        entries = sorted(link["field_map"].items(), key=lambda pair: pair[0] != link["source_key"])
+        for source, target in entries:
+            if target not in used_fields and len(used_fields) + len(mapping) < MAX_DATA_FIELDS:
+                mapping[source] = target
+        if link["source_key"] not in mapping:
+            continue
+        link["field_map"] = mapping
+        link["fields"] = list(mapping.values())
+        seen.add(key)
+        used_fields.update(mapping.values())
+        out.append(link)
+        if len(out) >= MAX_DATA_LINKS_PER_SHAPE:
+            break
+    return out
 
 
 def normalize_status_key(value: str) -> str:
@@ -335,9 +383,9 @@ def clean_shape(raw, theme: str) -> dict | None:
         "comments": clean_comments(raw.get("comments")),
         "layer": _line(raw.get("layer"), 64),
     }
-    data_link = clean_data_link(raw.get("data_link"))
-    if data_link:
-        shape["data_link"] = data_link
+    data_links = clean_data_links(raw.get("data_links"), raw.get("data_link"))
+    if data_links:
+        shape["data_links"] = data_links
     data_graphic = clean_data_graphic(raw.get("data_graphic"))
     if data_graphic:
         shape["data_graphic"] = data_graphic

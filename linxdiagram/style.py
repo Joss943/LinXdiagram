@@ -18,9 +18,9 @@ FONT_UI = "Inter"
 # Microsoft 365 / Office 2024 : accents plus vifs, surfaces claires et hiérarchie nette
 # entre barre de titre, onglets, ruban et espace de dessin.
 LIGHT = {
-    "accent": "#0078d4", "accent_hover": "#106ebe", "accent_pressed": "#005a9e",
-    "accent_text": "#ffffff", "accent_soft": "#deecf9", "accent_line": "#0078d4",
-    "titlebar": "#0f6cbd", "tabbar": "#f7f9fc", "tab_text": "#ffffff", "tab_ink": "#242424",
+    "accent": "#005a9e", "accent_hover": "#004578", "accent_pressed": "#00345b",
+    "accent_text": "#ffffff", "accent_soft": "#e5eff8", "accent_line": "#005a9e",
+    "titlebar": "#0b3d70", "tabbar": "#f7f9fc", "tab_text": "#ffffff", "tab_ink": "#242424",
     "ribbon": "#ffffff", "ribbon_border": "#e0e0e0", "separator": "#e0e0e0",
     "window": "#f4f6f8", "surface": "#ffffff", "surface2": "#f7f9fb",
     "text": "#242424", "text2": "#616161", "text3": "#a8a8a8",
@@ -30,9 +30,9 @@ LIGHT = {
 }
 
 DARK = {
-    "accent": "#75b8f0", "accent_hover": "#3d3d3d", "accent_pressed": "#4a4a4a",
-    "accent_text": "#ffffff", "accent_soft": "#293b4e", "accent_line": "#75b8f0",
-    "titlebar": "#1f1f1f", "tabbar": "#1f1f1f", "tab_text": "#f5f5f5", "tab_ink": "#f5f5f5",
+    "accent": "#356e9f", "accent_hover": "#407fb3", "accent_pressed": "#275982",
+    "accent_text": "#ffffff", "accent_soft": "#22384f", "accent_line": "#76b8ed",
+    "titlebar": "#17334e", "tabbar": "#1f1f1f", "tab_text": "#f5f5f5", "tab_ink": "#f5f5f5",
     "ribbon": "#2b2b2b", "ribbon_border": "#3d3d3d", "separator": "#474747",
     "window": "#1f1f1f", "surface": "#292929", "surface2": "#2e2e2e",
     "text": "#f5f5f5", "text2": "#c7c7c7", "text3": "#8a8a8a",
@@ -106,8 +106,8 @@ def apply(app: QApplication, dark: bool) -> None:
     app.setPalette(pal)
     a = _write_assets(T)
     t = T
-    file_tab_ink = "#ffffff" if not dark else "#151515"
-    file_tab_hover = t["accent_hover"] if not dark else "#8ac2f2"
+    file_tab_ink = "#ffffff"
+    file_tab_hover = t["accent_hover"]
     app.setStyleSheet(f"""
     /* Taille fixe comme dans Visio (9 pt) : sans cette règle, Qt reprend la taille du bureau
        (11 pt sous GNOME) pour tout widget stylé, et libellés et boutons débordent. */

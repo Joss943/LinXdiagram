@@ -885,9 +885,10 @@ class DataLinkDialog(QDialog):
         self.setMinimumWidth(520)
         lay = QVBoxLayout(self)
         intro = QLabel("Choisissez la colonne du CSV à comparer au texte d'une forme ou à une propriété "
-                       "existante. Les colonnes du fichier seront ajoutées aux données des formes. "
-                       "Le chemin local du fichier est conservé dans le dessin .lxd pour permettre "
-                       "une actualisation ultérieure.")
+                       "existante. Les colonnes sont ajoutées aux données des formes ; vous pouvez lier "
+                       "plusieurs fichiers locaux au même dessin. Si un nom existe déjà, le nom du fichier "
+                       "est ajouté à la colonne pour éviter d'écraser les autres données. Les chemins locaux "
+                       "sont conservés dans le dessin .lxd pour actualiser les sources à la demande.")
         intro.setWordWrap(True)
         lay.addWidget(intro)
         form = QFormLayout()

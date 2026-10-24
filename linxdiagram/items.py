@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (QApplication, QGraphicsItem, QGraphicsTextItem, QMe
                              QStyleOptionGraphicsItem)
 
 from . import security, stencils
-from .fileformat import MAX_TEXT, normalize_status_key
+from .fileformat import MAX_TEXT, clean_data_links, normalize_status_key
 from .routing import axis_direction, curve_controls, route_orthogonal
 from .swimlanes import HEADER as CFF_HEADER, PHASE as CFF_PHASE, TITLE as CFF_TITLE
 from .units import GRID_PX, MIN_SIZE_PX, mm_to_px
@@ -250,7 +250,7 @@ class ShapeItem(TextOwner):
         self.flip_h = self.flip_v = False
         self.style: dict = {}
         self.data: dict = {}
-        self.data_link: dict = {}
+        self.data_links: list[dict] = []
         self.data_graphic: dict = {}
         self.link = ""
         self.group = ""
@@ -278,8 +278,10 @@ class ShapeItem(TextOwner):
              "data": dict(self.data), "link": self.link, "group": self.group,
              "locked": self.locked, "tip": self.tip, "comments": [dict(c) for c in self.comments],
              "layer": self.layer}
-        if self.data_link:
-            d["data_link"] = dict(self.data_link)
+        if self.data_links:
+            d["data_links"] = [dict(link, fields=list(link.get("fields", [])),
+                                    field_map=dict(link.get("field_map", {})))
+                                for link in self.data_links]
         if self.data_graphic:
             d["data_graphic"] = dict(self.data_graphic)
         if self.type_id == "special.image":
@@ -306,7 +308,7 @@ class ShapeItem(TextOwner):
         self.text_style = dict(st["text_style"])
         self.text = st["text"]
         self.data = dict(st.get("data", {}))
-        self.data_link = dict(st.get("data_link", {}))
+        self.data_links = clean_data_links(st.get("data_links"), st.get("data_link"))
         self.data_graphic = dict(st.get("data_graphic", {}))
         self.link = st.get("link", "")
         self.group = st.get("group", "")
