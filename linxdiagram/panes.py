@@ -1186,6 +1186,8 @@ class DrawingExplorerPane(QWidget):
     ROLE_KIND = ROLE_IDS + 1
     ROLE_PAGE = ROLE_IDS + 2
     MAX_OBJECT_ROWS = 12_000
+    ALL_LAYERS = "__all_layers__"
+    NO_LAYER = "__no_layer__"
 
     def __init__(self, window):
         super().__init__()
@@ -1219,6 +1221,18 @@ class DrawingExplorerPane(QWidget):
         scope_row.addStretch(1)
         lay.addLayout(scope_row)
 
+        layer_row = QHBoxLayout()
+        layer_row.setContentsMargins(2, 0, 2, 0)
+        layer_row.addWidget(QLabel("Calque :"))
+        self.layer_filter = QComboBox()
+        self.layer_filter.addItem("Tous les calques", self.ALL_LAYERS)
+        self.layer_filter.currentIndexChanged.connect(self.schedule_refresh)
+        layer_row.addWidget(self.layer_filter, 1)
+        self.layer_filter_box = QWidget()
+        self.layer_filter_box.setLayout(layer_row)
+        self.layer_filter_box.hide()
+        lay.addWidget(self.layer_filter_box)
+
         self.summary = QLabel()
         self.summary.setObjectName("Hint")
         self.summary.setWordWrap(True)
@@ -1238,6 +1252,7 @@ class DrawingExplorerPane(QWidget):
 
     def _scope_changed(self, on: bool) -> None:
         self.win.settings.setValue("panes/drawing_all_pages", on)
+        self._refresh_layer_options()
         self.schedule_refresh()
 
     def refresh(self) -> None:
@@ -1252,12 +1267,50 @@ class DrawingExplorerPane(QWidget):
             self._doc_slots = []
             if doc is not None:
                 for signal in (doc.pagesChanged, doc.undo_stack.indexChanged):
-                    slot = self.schedule_refresh
+                    slot = self._document_changed
                     signal.connect(slot)
                     self._doc_slots.append((signal, slot))
         scene = self.win.scene()
         self._scene = scene
+        if self.isVisible():
+            self._refresh_layer_options()
         self.schedule_refresh()
+
+    def _document_changed(self, *_args) -> None:
+        if self.isVisible():
+            self._refresh_layer_options()
+        self.schedule_refresh()
+
+    def _refresh_layer_options(self) -> None:
+        doc = self.win.doc
+        active = self.win.scene()
+        if doc is None or active is None:
+            self.layer_filter_box.hide()
+            return
+        pages = doc.pages if self.all_pages.isChecked() else [active]
+        names = {layer.get("name", "") for page in pages for layer in page.layers if layer.get("name")}
+        has_unassigned = False
+        for page in pages:
+            for item in page.all_items():
+                if item.layer:
+                    names.add(item.layer)
+                else:
+                    has_unassigned = True
+        current = self.layer_filter.currentData()
+        options = [("Tous les calques", self.ALL_LAYERS)]
+        options.extend((name, name) for name in sorted(names, key=str.casefold))
+        if has_unassigned:
+            options.append(("Sans calque", self.NO_LAYER))
+        self.layer_filter.blockSignals(True)
+        try:
+            self.layer_filter.clear()
+            for label, value in options:
+                self.layer_filter.addItem(label, value)
+            indices = [i for i in range(self.layer_filter.count()) if self.layer_filter.itemData(i) == current]
+            self.layer_filter.setCurrentIndex(indices[0] if indices else 0)
+        finally:
+            self.layer_filter.blockSignals(False)
+        self.layer_filter_box.setVisible(bool(names or has_unassigned))
 
     def schedule_refresh(self, *_args) -> None:
         if self.isVisible():
@@ -1287,6 +1340,14 @@ class DrawingExplorerPane(QWidget):
         pages = list(enumerate(doc.pages)) if self.all_pages.isChecked() else [(active_index, active)]
         if self.all_pages.isChecked():
             pages.sort(key=lambda entry: (entry[0] != active_index, entry[0]))
+        selected_layer = self.layer_filter.currentData() or self.ALL_LAYERS
+
+        def in_layer(item) -> bool:
+            if selected_layer == self.ALL_LAYERS:
+                return True
+            if selected_layer == self.NO_LAYER:
+                return not item.layer
+            return item.layer == selected_layer
 
         page_entries = []
         matching_total = 0
@@ -1308,13 +1369,14 @@ class DrawingExplorerPane(QWidget):
                 if group is not None:
                     group_id, members = group
                     group_matches = needle in f"groupe {group_id}".casefold() if needle else False
-                    visible_members = [member for member in members if not needle or page_matches or group_matches
-                                       or self._item_matches(member, needle)]
+                    visible_members = [member for member in members if in_layer(member)
+                                       and (not needle or page_matches or group_matches
+                                            or self._item_matches(member, needle))]
                     if visible_members:
                         visible_members.sort(key=lambda value: value.zValue(), reverse=True)
                         visible_entries.append((None, (group_id, visible_members)))
                         matching_total += len(visible_members)
-                elif not needle or page_matches or self._item_matches(item, needle):
+                elif in_layer(item) and (not needle or page_matches or self._item_matches(item, needle)):
                     visible_entries.append((item, None))
                     matching_total += 1
             if visible_entries or (self.all_pages.isChecked() and (not needle or page_matches)):
@@ -1391,10 +1453,14 @@ class DrawingExplorerPane(QWidget):
             self.summary.setText(f"{shown_text} objets affichés sur {total_text}. Affinez la recherche pour réduire la liste.")
         elif self.all_pages.isChecked():
             total_text = f"{matching_total:,}".replace(",", " ")
-            self.summary.setText(f"{total_text} objet(s) · {len(page_entries)} page(s)")
+            layer_label = self.layer_filter.currentText()
+            suffix = f" · {layer_label}" if selected_layer != self.ALL_LAYERS else ""
+            self.summary.setText(f"{total_text} objet(s) · {len(page_entries)} page(s){suffix}")
         else:
             total_text = f"{matching_total:,}".replace(",", " ")
-            self.summary.setText(f"{total_text} objet(s) · {active.page_name}")
+            layer_label = self.layer_filter.currentText()
+            suffix = f" · {layer_label}" if selected_layer != self.ALL_LAYERS else ""
+            self.summary.setText(f"{total_text} objet(s) · {active.page_name}{suffix}")
 
     @staticmethod
     def _item_matches(item, needle: str) -> bool:

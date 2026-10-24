@@ -8,7 +8,7 @@ et sans reprendre les éléments de marque ou le code propriétaire de Microsoft
 | Domaine | LinXdiagram aujourd’hui | Écart à traiter |
 |---|---|---|
 | Création et mise en page | Ruban et volets inspirés de Visio PC, palette de bureau Office 2024, gabarits, pages, groupes, thèmes, connecteurs, règles, grille, guides, calques et validation ; gabarits initiaux BPMN, plan de bureau et circuit | Étendre les bibliothèques BPMN, architecture et ingénierie |
-| Navigation dans le dessin | Explorateur filtrable sur la page active ou toutes les pages, avec recherche dans le texte et les données de forme ; sélection des formes, groupes et connecteurs | Ajouter une vue par calque, développer les conteneurs et objets imbriqués, et afficher les propriétés du document |
+| Navigation dans le dessin | Explorateur filtrable sur la page active ou toutes les pages, avec recherche dans le texte et les données de forme, filtre par calque et sélection des formes, groupes et connecteurs | Développer les conteneurs et objets imbriqués, et afficher les propriétés du document |
 | Données | Création d’organigrammes et de flux depuis CSV ; liaison persistante dans `.lxd` des formes à un CSV local par clé avec actualisation à la demande ; données libres par forme et rapports CSV | Graphiques de données visuels, règles de couleur et plusieurs sources liées |
 | Fichiers Visio | Import/export VSDX, formes, pages, styles, connecteurs et plusieurs métadonnées | Les liens vers CSV restent propres au `.lxd` ; les formules ShapeSheet ne sont pas exécutées ; VSD binaire, EMF/WMF et objets OLE ne sont pas pris en charge |
 | Collaboration | Commentaires locaux et documents hors ligne | Coédition, présence, stockage cloud et intégration Teams hors périmètre actuel |
@@ -17,7 +17,7 @@ et sans reprendre les éléments de marque ou le code propriétaire de Microsoft
 
 ## Ordre de travail proposé
 
-1. Ajouter la navigation par calque et l’exploration des conteneurs et propriétés du document.
+1. Ajouter l’exploration des conteneurs, objets imbriqués et propriétés du document.
 2. Étendre BPMN, architecture et les bibliothèques d’ingénierie.
 3. Ajouter des graphiques de données et des règles visuelles aux liaisons CSV locales.
 4. Améliorer la fidélité des aller-retours VSDX et documenter chaque élément non pris en charge.
