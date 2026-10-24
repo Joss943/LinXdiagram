@@ -409,6 +409,13 @@ def _ellipse_tool(c):
     c.ellipse(16, 16, 13, 9.5, fill=PAPER, stroke=INK)
 
 
+@_reg("pen_tool", "tool_pen")
+def _pen_tool(c):
+    c.line(7, 24, 23, 8, INK, 3)
+    c.poly([(5, 27), (7, 21), (11, 25)], fill=YELLOW, stroke=INK)
+    c.line(20, 7, 24, 11, BLUE, 2)
+
+
 @_reg("drawing_tools")
 def _drawing_tools(c):
     c.rect(3, 4, 15, 12, fill=PAPER, stroke=INK)

@@ -8,6 +8,7 @@ import csv
 import io
 import math
 import os
+import unicodedata
 
 from PyQt6.QtCore import (QBuffer, QIODevice, QMimeData, QPoint, QPointF, QRectF, QSize, Qt, QTimer,
                           QUrl)
@@ -62,6 +63,16 @@ def _clean_data_headers(headers: list[str]) -> list[str]:
     if any(not h for h in clean) or len(set(clean)) != len(clean):
         raise datavis.DataError("Pour lier les données, chaque colonne CSV doit avoir un nom unique de 100 caractères maximum.")
     return clean
+
+
+def _csv_safe_cell(value: str) -> str:
+    """Neutralise les cellules texte actives dans Excel/LibreOffice sans casser les lignes CSV."""
+    value = str(value)
+    index = 0
+    while index < len(value) and (value[index].isspace() or value[index] == "\ufeff"
+                                  or unicodedata.category(value[index]) == "Cf"):
+        index += 1
+    return "'" + value if value[index:index + 1] in ("=", "+", "-", "@") else value
 
 
 def _merge_linked_data(existing: dict, old_fields: list[str], headers: list[str], row: list[str]) -> tuple[dict, int]:
@@ -149,6 +160,11 @@ class MainWindow(QMainWindow):
         self.a[key] = a
         return a
 
+    def _plain_message(self, icon: QMessageBox.Icon, title: str, text: str) -> None:
+        box = QMessageBox(icon, title, str(text), QMessageBox.StandardButton.Ok, self)
+        box.setTextFormat(Qt.TextFormat.PlainText)
+        box.exec()
+
     def _sc(self, fn):
         """Exécute fn(scène) s'il y a une page affichée."""
         def run():
@@ -202,6 +218,7 @@ class MainWindow(QMainWindow):
                 ("text", "Texte", "tool_text", "Ctrl+2", "Cliquez sur la page pour écrire du texte."),
                 ("connector", "Connecteur", "connector", "Ctrl+3", "Faites glisser d'une forme à une autre."),
                 ("line", "Ligne", "line", "Ctrl+6", "Tracer un trait."),
+                ("pen", "Stylo", "pen_tool", "Ctrl+7", "Tracer un dessin à main levée."),
                 ("rectangle", "Rectangle", "rect_tool", "Ctrl+8", "Dessiner un rectangle."),
                 ("ellipse", "Ellipse", "ellipse_tool", "Ctrl+9", "Dessiner une ellipse.")):
             act = A(f"tool_{key}", text, ic, sc, None, checkable=True, tip=tip,
@@ -571,7 +588,7 @@ class MainWindow(QMainWindow):
 
         g = RibbonGroup("Outils")
         g.large(a["tool_select"])
-        draw_menu = self._menu(a["tool_rectangle"], a["tool_ellipse"], a["tool_line"])
+        draw_menu = self._menu(a["tool_rectangle"], a["tool_ellipse"], a["tool_line"], a["tool_pen"])
         g.column(a["tool_connector"], a["tool_text"],
                  R(None, SMALL, text="Outils de dessin", icon_name="drawing_tools", menu=draw_menu))
         home.addWidget(g)
@@ -1353,7 +1370,7 @@ class MainWindow(QMainWindow):
             try:
                 sc.paste(bytes(md.data(CLIP_MIME)), QPointF(off, off))
             except fileformat.DocumentError as exc:
-                QMessageBox.warning(self, APP_NAME, str(exc))
+                self._plain_message(QMessageBox.Icon.Warning, APP_NAME, str(exc))
             return
         if md.hasImage():
             img = md.imageData()
@@ -1718,7 +1735,7 @@ class MainWindow(QMainWindow):
             name = self.doc.unique_page_name("Données")
             page = datavis.build_page(dlg.kind.currentData(), headers, rows, name, self.doc.settings["theme"])
         except (security.SecurityError, datavis.DataError, fileformat.DocumentError) as exc:
-            QMessageBox.warning(self, "Créer à partir de données", str(exc))
+            self._plain_message(QMessageBox.Icon.Warning, "Créer à partir de données", str(exc))
             return
         sc = self.scene()
         if dlg.new_page.isChecked() or sc.all_items():
@@ -1757,7 +1774,7 @@ class MainWindow(QMainWindow):
             headers, rows = datavis.parse_csv(security.read_file_limited(path, 5 * 1024 * 1024))
             headers = _clean_data_headers(headers)
         except (security.SecurityError, datavis.DataError) as exc:
-            QMessageBox.warning(self, "Lier les données", str(exc))
+            self._plain_message(QMessageBox.Icon.Warning, "Lier les données", str(exc))
             return
         dlg = DataLinkDialog(headers, rows, candidates, self)
         if dlg.exec() != DataLinkDialog.DialogCode.Accepted:
@@ -1867,11 +1884,11 @@ class MainWindow(QMainWindow):
             msg += f" {omitted} propriété(s) manuelle(s) retirée(s) pour respecter la limite de champs."
         if errors:
             msg += "\n\n" + "\n".join(dict.fromkeys(errors))
-            QMessageBox.warning(self, "Actualisation des données", msg)
+            self._plain_message(QMessageBox.Icon.Warning, "Actualisation des données", msg)
         elif updated:
             self.statusBar().showMessage(msg, 8000)
         else:
-            QMessageBox.information(self, "Actualisation des données", msg)
+            self._plain_message(QMessageBox.Icon.Information, "Actualisation des données", msg)
 
     def unlink_data(self) -> None:
         sc = self.scene()
@@ -1934,19 +1951,21 @@ class MainWindow(QMainWindow):
                         keys.append(k)
                 rows.append((p.page_name, s))
         buf = io.StringIO()
-        w = csv.writer(buf, delimiter=";")
-        w.writerow(["Page", "Forme", "Texte", "Largeur (mm)", "Hauteur (mm)", "X (mm)", "Y (mm)", "Calque"] + keys)
+        w = csv.writer(buf, delimiter=";", lineterminator="\n")
+        header = ["Page", "Forme", "Texte", "Largeur (mm)", "Hauteur (mm)", "X (mm)",
+                  "Y (mm)", "Calque"] + keys
+        w.writerow([_csv_safe_cell(value) for value in header])
         for page_name, s in rows:
-            w.writerow([page_name, s.sdef.name, s.text.replace("\n", " "), f"{s.w / PX_PER_MM:.1f}",
-                        f"{s.h / PX_PER_MM:.1f}", f"{s.pos().x() / PX_PER_MM:.1f}",
-                        f"{s.pos().y() / PX_PER_MM:.1f}", s.layer] + [s.data.get(k, "") for k in keys])
+            row = [_csv_safe_cell(page_name), _csv_safe_cell(s.sdef.name), _csv_safe_cell(s.text),
+                   f"{s.w / PX_PER_MM:.1f}", f"{s.h / PX_PER_MM:.1f}",
+                   f"{s.pos().x() / PX_PER_MM:.1f}", f"{s.pos().y() / PX_PER_MM:.1f}",
+                   _csv_safe_cell(s.layer)]
+            row.extend(_csv_safe_cell(s.data.get(k, "")) for k in keys)
+            w.writerow(row)
         try:
-            # Préfixe ' pour neutraliser les formules dans les tableurs (injection CSV).
-            text = "\n".join(line if not line[:1] in "=+-@" else "'" + line
-                             for line in buf.getvalue().splitlines())
-            security.atomic_write(path, ("﻿" + text + "\n").encode("utf-8"), private=False)
+            security.atomic_write(path, ("﻿" + buf.getvalue()).encode("utf-8"), private=False)
         except OSError as exc:
-            QMessageBox.critical(self, "Rapports de forme", str(exc))
+            self._plain_message(QMessageBox.Icon.Critical, "Rapports de forme", str(exc))
             return
         self.statusBar().showMessage(f"Rapport enregistré : {path}", 6000)
 
@@ -2009,7 +2028,7 @@ class MainWindow(QMainWindow):
         try:
             data = security.read_file_limited(path, fileformat.MAX_IMAGE_BYTES)
         except security.SecurityError as exc:
-            QMessageBox.warning(self, "Image refusée", str(exc))
+            self._plain_message(QMessageBox.Icon.Warning, "Image refusée", str(exc))
             return
         self._insert_image_bytes(data, pos)
 
@@ -2488,7 +2507,8 @@ class MainWindow(QMainWindow):
         except fileformat.PasswordRequired:
             return
         except (fileformat.DocumentError, security.SecurityError, OSError) as exc:
-            QMessageBox.critical(self, "Impossible d'ouvrir le document", f"{os.path.basename(path)}\n\n{exc}")
+            self._plain_message(QMessageBox.Icon.Critical, "Impossible d'ouvrir le document",
+                                f"{os.path.basename(path)}\n\n{exc}")
             return
         doc.path = path
         doc.password = password
@@ -2503,8 +2523,11 @@ class MainWindow(QMainWindow):
         target.hide_backstage()
         target.view.fit_page()
         if warnings:
-            QMessageBox.information(target, "Document ouvert avec des remarques",
-                                    "\n".join(f"• {w}" for w in warnings[:12]))
+            box = QMessageBox(QMessageBox.Icon.Information, "Document ouvert avec des remarques",
+                              "\n".join(f"• {w}" for w in warnings[:12]), QMessageBox.StandardButton.Ok,
+                              target)
+            box.setTextFormat(Qt.TextFormat.PlainText)
+            box.exec()
 
     def save(self) -> bool:
         if self.doc.path is None:
@@ -2539,7 +2562,8 @@ class MainWindow(QMainWindow):
             else:
                 self.doc.save(path)
         except (OSError, security.SecurityError, fileformat.DocumentError, ValueError) as exc:
-            QMessageBox.critical(self, "Échec de l'enregistrement", f"{path}\n\n{exc}")
+            self._plain_message(QMessageBox.Icon.Critical, "Échec de l'enregistrement",
+                                f"{path}\n\n{exc}")
             return False
         self._remember_dir(path)
         self.ctx.add_recent(path)
@@ -2562,9 +2586,9 @@ class MainWindow(QMainWindow):
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             fn()
-        except (OSError, security.SecurityError, ValueError) as exc:
+        except (OSError, security.SecurityError, fileformat.DocumentError, ValueError) as exc:
             QApplication.restoreOverrideCursor()
-            QMessageBox.critical(self, "Échec de l'export", f"{path}\n\n{exc}")
+            self._plain_message(QMessageBox.Icon.Critical, "Échec de l'export", f"{path}\n\n{exc}")
             return
         QApplication.restoreOverrideCursor()
         self._remember_dir(path)

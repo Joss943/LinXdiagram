@@ -960,11 +960,13 @@ class ShapeDataPane(QWidget):
         self.hint.setWordWrap(True)
         lay.addWidget(self.hint)
         self.link_status = QLabel()
+        self.link_status.setTextFormat(Qt.TextFormat.PlainText)
         self.link_status.setObjectName("Hint")
         self.link_status.setWordWrap(True)
         self.link_status.hide()
         lay.addWidget(self.link_status)
         self.graphic_status = QLabel()
+        self.graphic_status.setTextFormat(Qt.TextFormat.PlainText)
         self.graphic_status.setObjectName("Hint")
         self.graphic_status.setWordWrap(True)
         self.graphic_status.hide()
@@ -1400,8 +1402,8 @@ class DrawingExplorerPane(QWidget):
                     page_root.setData(0, self.ROLE_KIND, "page")
                     page_root.setData(0, self.ROLE_PAGE, page_index)
                     page_object_count = sum(len(group[1]) if group else 1 for _item, group in entries)
-                    page_root.setToolTip(0, f"{scene.page_name}\nPage {page_index + 1} · "
-                                           f"{page_object_count} objet(s)")
+                    page_root.setToolTip(0, security.tooltip_html(f"{scene.page_name}\nPage {page_index + 1} · "
+                                                                  f"{page_object_count} objet(s)"))
                     self.tree.addTopLevelItem(page_root)
                     self._page_rows[page_index] = page_root
                     page_root.setExpanded(True)
@@ -1482,8 +1484,8 @@ class DrawingExplorerPane(QWidget):
         row.setData(0, self.ROLE_IDS, [item.id])
         row.setData(0, self.ROLE_KIND, "object")
         row.setData(0, self.ROLE_PAGE, page_index)
-        row.setToolTip(0, f"{label}\n{kind}\nID : {item.id}")
-        row.setToolTip(1, f"ID : {item.id}")
+        row.setToolTip(0, security.tooltip_html(f"{label}\n{kind}\nID : {item.id}"))
+        row.setToolTip(1, security.tooltip_html(f"ID : {item.id}"))
         if isinstance(item, ShapeItem):
             row.setIcon(0, QIcon(icons.stencil_pixmap(item.sdef, 24)))
             if item.locked:

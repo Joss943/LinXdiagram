@@ -322,7 +322,7 @@ class ShapeItem(TextOwner):
         self.comments = [dict(c) for c in st.get("comments", [])]
         self.layer = st.get("layer", "")
         self.cff_opts = dict(st.get("cff", {})) if self.sdef.cff else {}
-        self.setToolTip(self.tip)
+        self.setToolTip(security.tooltip_html(self.tip))
         self.setFlag(GIF.ItemIsMovable, not self.locked)
         self._applying = True
         self.setPos(st["x"], st["y"])

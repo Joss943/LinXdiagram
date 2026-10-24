@@ -114,6 +114,14 @@ class _Package:
         infos = self.zip.infolist()
         if len(infos) > MAX_MEMBERS:
             raise VsdxError("Paquet Visio anormal (trop de parties).")
+        names = [info.filename for info in infos]
+        if len(set(names)) != len(names):
+            raise VsdxError("Paquet Visio ambigu : noms de parties dupliqués.")
+        for name in names:
+            parts = name.split("/")
+            if (not name or name.startswith(("/", "\\")) or "\\" in name or "\x00" in name
+                    or any(part in (".", "..") for part in parts)):
+                raise VsdxError("Paquet Visio invalide : chemin de partie non autorisé.")
         self.infos = {i.filename: i for i in infos}
         self.total = 0
 
@@ -139,6 +147,8 @@ class _Package:
         data = self.read(name)
         if data is None:
             return None
+        if b"\x00" in data:
+            raise VsdxError(f"XML non UTF-8 refusé dans {name}.")
         if _DTD_RE.search(data):
             raise VsdxError("XML avec DTD refusé (protection contre les attaques XXE).")
         try:

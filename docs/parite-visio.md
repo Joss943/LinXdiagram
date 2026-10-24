@@ -13,7 +13,7 @@ et sans reprendre les éléments de marque ou le code propriétaire de Microsoft
 | Fichiers Visio | Import/export VSDX, formes, pages, styles, connecteurs et plusieurs métadonnées ; les graphiques sont des annotations vectorielles dans Visio, avec métadonnées permettant à LinXdiagram de reconstruire l’association lors du réimport | Dans Visio, l’annotation peut être déplacée séparément de sa forme ; les formules ShapeSheet ne sont pas exécutées ; VSD binaire, EMF/WMF et objets OLE ne sont pas pris en charge |
 | Collaboration | Commentaires locaux et documents hors ligne | Coédition, présence, stockage cloud et intégration Teams hors périmètre actuel |
 | Automatisation | Recherche de commandes, raccourcis et dispositions automatiques | Macros et compléments absents par conception ; ils nécessiteraient un modèle d’exécution isolé |
-| Dessin au stylet | Outils de formes et de lignes | Outils de tracé libre et annotations tactiles à ajouter |
+| Dessin au stylet | Outil Stylo à main levée (Ctrl+7) ; le tracé est enregistré comme une forme personnalisée, modifiable avec les outils de mise en forme et l’historique Annuler/Rétablir | Annotations tactiles sensibles à la pression et édition des points du tracé |
 
 ## Ordre de travail proposé
 

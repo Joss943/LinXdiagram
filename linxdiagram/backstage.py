@@ -253,7 +253,7 @@ class Backstage(QWidget):
                 it = QTreeWidgetItem([f"{os.path.basename(p)}\n{os.path.dirname(p)}", when])
                 it.setIcon(0, icons.icon("visio" if p.lower().endswith(".vsdx") else "page_setup"))
                 it.setData(0, Qt.ItemDataRole.UserRole, p if exists else None)
-                it.setToolTip(0, p)
+                it.setToolTip(0, security.tooltip_html(p))
                 if not exists:
                     it.setDisabled(True)
                 tree.addTopLevelItem(it)
@@ -266,6 +266,7 @@ class Backstage(QWidget):
     def _info(self) -> QWidget:
         area, lay = _page("Informations")
         self.info_name = QLabel()
+        self.info_name.setTextFormat(Qt.TextFormat.PlainText)
         self.info_name.setStyleSheet("font-size: 16px;")
         lay.addWidget(self.info_name)
         cols = QHBoxLayout()
@@ -291,6 +292,7 @@ class Backstage(QWidget):
                            ("encrypted", "Chiffrement"), ("title", "Titre"), ("author", "Auteur"),
                            ("subject", "Objet")):
             v = QLabel("—")
+            v.setTextFormat(Qt.TextFormat.PlainText)
             v.setStyleSheet(f"color: {T['text2']};")
             self.props_form.addRow(label, v)
             self.props_labels[key] = v

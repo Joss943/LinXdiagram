@@ -59,7 +59,7 @@ Carlito (métriquement identique à Calibri) est utilisée si elle est installé
 
 | Onglet | Fonctions |
 |---|---|
-| Accueil | Coller, couper, copier, reproduire la mise en forme ; police, taille, A⁺/A⁻, effacer la mise en forme, gras, italique, souligné, barré, casse ; alignements ; Pointeur, Connecteur, Texte, outils de dessin ; **Styles rapides** (35 styles), Remplissage, Trait (couleur, épaisseur, tirets, flèches), Effets (ombre, lumière, dégradé) ; Aligner, Position, Premier plan, Arrière-plan, Grouper ; **Modifier la forme**, Calques, Sélectionner par type, Rechercher / Remplacer |
+| Accueil | Coller, couper, copier, reproduire la mise en forme ; police, taille, A⁺/A⁻, effacer la mise en forme, gras, italique, souligné, barré, casse ; alignements ; Pointeur, Connecteur, Texte, outils de dessin dont **Stylo à main levée** (Ctrl+7) ; **Styles rapides** (35 styles), Remplissage, Trait (couleur, épaisseur, tirets, flèches), Effets (ombre, lumière, dégradé) ; Aligner, Position, Premier plan, Arrière-plan, Grouper ; **Modifier la forme**, Calques, Sélectionner par type, Rechercher / Remplacer |
 | Insertion | Page vierge, dupliquer, renommer, supprimer ; Images ; Conteneur, Légende, Connecteur ; Lien (web ou page du document) ; Zone de texte, Info-bulle d'écran, Symbole |
 | Création | Orientation, Taille, **Taille automatique**, Mise en page ; **Thèmes** et **Variantes** ; Arrière-plans, **Bordures et titres** ; **Redisposer la page**, Connecteurs, **sauts de ligne** |
 | Données | **Créer à partir de données** (organigramme ou diagramme de flux depuis un CSV), lier des formes à un CSV local par clé et actualiser à la demande, **graphiques de données** (étiquette et valeur, valeur seule ou pastille de statut colorée), fenêtre Données de forme, **Rapports de forme** (CSV). À l’export VSDX, les graphiques deviennent des annotations vectorielles statiques et séparables dans Visio ; les métadonnées LinXdiagram rétablissent leur association au réimport. |
@@ -131,23 +131,29 @@ Aucun code de Microsoft n'est utilisé ni décompilé.
   (contrairement aux macros VBA de Visio).
 * **Format `.lxd` en JSON strictement validé** : liste blanche des champs, nombres finis
   et bornés, tailles et quantités limitées, empreinte SHA-256 contre l'altération.
-* **Chiffrement par mot de passe** : AES-256-GCM (OpenSSL) et dérivation scrypt ;
+* **Chiffrement par mot de passe** : AES-256-GCM (OpenSSL) et dérivation scrypt aux
+  paramètres bornés pour empêcher un fichier piégé d'épuiser la mémoire ;
   vérifié avec le vecteur de test officiel du NIST. Les copies de récupération d'un
   document chiffré restent chiffrées.
 * **Import VSDX blindé** : protection contre les bombes de décompression, XML avec
-  DTD refusé (XXE, « billion laughs »), chemins normalisés, aucune ressource externe.
+  DTD refusé (XXE, « billion laughs »), XML non UTF-8 et parties ZIP ambiguës refusés,
+  chemins normalisés, aucune ressource externe.
 * **Images** : PNG/JPEG uniquement, décodées avec plafond mémoire, ré-encodées à
   l'insertion pour retirer les métadonnées (EXIF, GPS).
-* **Liens** : http, https et mailto seulement, confirmation avant ouverture.
+* **Liens** : http, https et mailto seulement, sans identifiants intégrés, confirmation avant ouverture.
+* **Contenu utilisateur** : texte de document affiché comme texte brut dans les infobulles ; formules
+  CSV neutralisées cellule par cellule dans les rapports.
 * **Fichiers** : écriture atomique, nouveaux documents en droits 0600, lecture
   bornée (pas de FIFO ni de périphérique), pas de core dump.
-* **Aucune connexion réseau**, aucune télémétrie ; collage en texte brut uniquement.
+* **Aucune connexion réseau en arrière-plan**, aucune télémétrie ; les liens web ne s'ouvrent
+  dans le navigateur qu'après une action et une confirmation ; collage en texte brut uniquement.
 * **Flatpak** (`packaging/flatpak`) : bac à sable sans accès réseau.
 
 ## Confidentialité (RGPD)
 
-Aucune donnée n'est collectée ni transmise : pas de connexion réseau, de télémétrie ni de
-compte. Tout reste sur votre ordinateur ; le nom de connexion du système n'est jamais inscrit
+Aucune donnée n'est collectée ni transmise par LinXdiagram : pas de service cloud, de télémétrie
+ni de compte. Les liens web sont ouverts uniquement sur demande dans le navigateur du système.
+Tout reste sur votre ordinateur ; le nom de connexion du système n'est jamais inscrit
 dans les documents. Détails et emplacements des fichiers locaux : [PRIVACY.md](PRIVACY.md).
 
 ## Accessibilité

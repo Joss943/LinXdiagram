@@ -20,5 +20,7 @@ par l'ENISA et le règlement européen sur la cyberrésilience (CRA).
 ## Mesures de sécurité de l'application
 
 Voir la section « Sécurité » du [README](README.md) : pas de macros ni de formules exécutées,
-aucune connexion réseau, validation stricte des fichiers, import VSDX protégé contre les
-bombes de décompression et les attaques XML, chiffrement AES-256-GCM.
+aucune connexion réseau automatique, validation stricte des fichiers, import VSDX protégé contre
+les bombes de décompression, les parties ZIP ambiguës et les attaques XML, chiffrement AES-256-GCM
+avec paramètres scrypt bornés. Le contenu des documents reste du texte dans l'interface, et les
+rapports CSV neutralisent les formules dans chaque cellule texte.

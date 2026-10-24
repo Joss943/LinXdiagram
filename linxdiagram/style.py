@@ -106,6 +106,8 @@ def apply(app: QApplication, dark: bool) -> None:
     app.setPalette(pal)
     a = _write_assets(T)
     t = T
+    file_tab_ink = "#ffffff" if not dark else "#151515"
+    file_tab_hover = t["accent_hover"] if not dark else "#8ac2f2"
     app.setStyleSheet(f"""
     /* Taille fixe comme dans Visio (9 pt) : sans cette règle, Qt reprend la taille du bureau
        (11 pt sous GNOME) pour tout widget stylé, et libellés et boutons débordent. */
@@ -133,10 +135,11 @@ def apply(app: QApplication, dark: bool) -> None:
         margin: 2px 1px 0 1px; }}
     QPushButton#RibbonTab:hover {{ background: {t['pressed'] if not dark else t['hover']};
         border-top-left-radius: 4px; border-top-right-radius: 4px; }}
-    QPushButton#RibbonTab:checked {{ color: {t['accent_line']}; border-bottom: 3px solid {t['accent_line']}; }}
-    QPushButton#FileTab {{ color: {t['tab_ink']}; background: transparent; border: none; border-radius: 4px;
-        padding: 6px 12px 6px 12px; font-size: 12px; margin: 2px 1px 0 6px; }}
-    QPushButton#FileTab:hover {{ background: {t['pressed'] if not dark else t['hover']}; }}
+    QPushButton#RibbonTab:checked {{ color: {t['accent_line']}; border-bottom: 3px solid {t['accent_line']};
+        font-weight: 600; }}
+    QPushButton#FileTab {{ color: {file_tab_ink}; background: {t['accent']}; border: none; border-radius: 3px;
+        padding: 6px 12px; font-size: 12px; font-weight: 600; margin: 2px 1px 0 6px; }}
+    QPushButton#FileTab:hover {{ background: {file_tab_hover}; }}
     #TabBarTools QToolButton {{ background: transparent; border: none; border-radius: 4px; color: {t['tab_ink']};
         padding: 3px 6px; }}
     #TabBarTools QToolButton:hover {{ background: {t['pressed'] if not dark else t['hover']}; }}

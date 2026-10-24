@@ -105,6 +105,7 @@ class TitleBar(QWidget):
         lay.addStretch(1)
         self.title = QLabel()
         self.title.setObjectName("Title")
+        self.title.setTextFormat(Qt.TextFormat.PlainText)
         lay.addWidget(self.title)
         lay.addSpacing(18)
         self.search = CommandSearch(window)
