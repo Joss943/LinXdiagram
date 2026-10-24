@@ -12,6 +12,8 @@ TEMPLATE_SETUP = {
     "bpmn": (stencils.BPMN, "orthogonal", True),
     "org": (stencils.ORG, "orthogonal", True),
     "network": (stencils.NET, "straight", True),
+    "floorplan": (stencils.FLOORPLAN, "orthogonal", True),
+    "circuit": (stencils.CIRCUIT, "straight", False),
     "uml": (stencils.UML, "straight", False),
     "sample": (stencils.FLOW, "orthogonal", False),
     "cff": (stencils.CFF, "orthogonal", True),
@@ -75,6 +77,28 @@ def build(template: str) -> dict:
                               for n, (a, b, text) in enumerate(links)]
         for conn in page["connectors"]:
             conn["style"]["line"] = "#404040"
+    if template == "floorplan":
+        room = _shape("room", "floor.room", 148, 105, "Bureau", 0)
+        room.update(w=mm_to_px(240), h=mm_to_px(160))
+        objects = [("window", "floor.window", 145, 27, ""), ("door", "floor.door", 35, 165, ""),
+                   ("desk", "floor.desk", 82, 70, "Poste de travail"),
+                   ("chair", "floor.chair", 82, 104, ""), ("table", "floor.table", 180, 80, "Réunion"),
+                   ("stairs", "floor.stairs", 230, 145, "")]
+        page["shapes"] = [room] + [_shape(i, t, x, y, text, n + 1)
+                                    for n, (i, t, x, y, text) in enumerate(objects)]
+    if template == "circuit":
+        components = [("battery", "circuit.battery", 35, 90, "Alimentation"),
+                      ("resistor", "circuit.resistor", 85, 90, "R1"),
+                      ("capacitor", "circuit.capacitor", 135, 90, "C1"),
+                      ("lamp", "circuit.lamp", 190, 90, "L1"),
+                      ("ground", "circuit.ground", 135, 145, "")]
+        page["shapes"] = [_shape(i, t, x, y, text, n) for n, (i, t, x, y, text) in enumerate(components)]
+        links = [("battery", "resistor"), ("resistor", "capacitor"), ("capacitor", "lamp"),
+                 ("capacitor", "ground")]
+        page["connectors"] = [_conn(f"cc{n}", a, b, 100 + n) for n, (a, b) in enumerate(links)]
+        for conn in page["connectors"]:
+            conn["style"]["arrow_end"] = "none"
+            conn["style"]["line"] = "#202020"
     if template == "sample":
         doc["properties"]["title"] = "Traitement d'une commande"
         shapes = [
@@ -115,6 +139,8 @@ TEMPLATES = [
     ("bpmn", "Diagramme de processus BPMN"),
     ("org", "Organigramme hiérarchique"),
     ("network", "Diagramme réseau de base"),
+    ("floorplan", "Plan de bureau"),
+    ("circuit", "Schéma électrique"),
     ("cff", "Diagramme de flux interfonctionnel"),
     ("uml", "Diagramme de classes UML"),
     ("sample", "Exemple : traitement de commande"),
@@ -125,8 +151,8 @@ def preview(template: str) -> dict:
     """Petit diagramme d'illustration pour la vignette du modèle (comme dans Visio)."""
     if template == "sample":
         return build("sample")
-    if template == "bpmn":
-        return build("bpmn")
+    if template in ("bpmn", "floorplan", "circuit"):
+        return build(template)
     page = fileformat.default_page("Aperçu")
     if template == "cff":
         page["shapes"] = cff_states("h", 10, 10, ["Client", "Ventes", "Logistique"], "Commande",

@@ -414,6 +414,63 @@ def _bpmn_subprocess(w: float, h: float):
     return p, detail
 
 
+def _floor_window(w: float, h: float):
+    p = QPainterPath()
+    p.addRect(QRectF(0, 0, w, h))
+    detail = _lines([(w / 3, 0), (w / 3, h)], [(2 * w / 3, 0), (2 * w / 3, h)])
+    return p, detail
+
+
+def _floor_desk(w: float, h: float):
+    p = QPainterPath()
+    p.addRoundedRect(QRectF(0, 0, w, h * 0.72), min(w, h) * 0.05, min(w, h) * 0.05)
+    detail = _lines([(w * 0.12, h * 0.72), (w * 0.12, h)],
+                    [(w * 0.88, h * 0.72), (w * 0.88, h)])
+    return p, detail
+
+
+def _floor_stairs(w: float, h: float):
+    p = QPainterPath()
+    p.addRect(QRectF(0, 0, w, h))
+    detail = _lines(*[[(0, h * i / 7), (w, h * i / 7)] for i in range(1, 7)])
+    return p, detail
+
+
+def _floor_door():
+    leaf = _lines([(0.5, 0.5), (0.5, 0)])
+    swing = QPainterPath()
+    swing.arcMoveTo(QRectF(0, 0, 1, 1), 90)
+    swing.arcTo(QRectF(0, 0, 1, 1), 90, -90)
+    return leaf, swing
+
+
+def _circuit_resistor():
+    return _lines([(0, 0.5), (0.15, 0.5), (0.25, 0.25), (0.4, 0.75), (0.55, 0.25),
+                   (0.7, 0.75), (0.85, 0.5), (1, 0.5)]), None
+
+
+def _circuit_capacitor():
+    return _lines([(0, 0.5), (0.42, 0.5)], [(0.42, 0.15), (0.42, 0.85)],
+                  [(0.58, 0.15), (0.58, 0.85)], [(0.58, 0.5), (1, 0.5)]), None
+
+
+def _circuit_battery():
+    return _lines([(0, 0.5), (0.38, 0.5)], [(0.38, 0.2), (0.38, 0.8)],
+                  [(0.55, 0.33), (0.55, 0.67)], [(0.55, 0.5), (1, 0.5)]), None
+
+
+def _circuit_ground():
+    return _lines([(0.5, 0), (0.5, 0.48)], [(0.2, 0.48), (0.8, 0.48)],
+                  [(0.3, 0.65), (0.7, 0.65)], [(0.4, 0.82), (0.6, 0.82)]), None
+
+
+def _circuit_lamp():
+    outline = _ellipse(0.5, 0.5, 0.38, 0.38)
+    detail = _lines([(0.3, 0.3), (0.7, 0.7)], [(0.7, 0.3), (0.3, 0.7)],
+                    [(0, 0.5), (0.12, 0.5)], [(0.88, 0.5), (1, 0.5)])
+    return outline, detail
+
+
 def _arrow_pts(direction: str):
     right = [(0, 0.25), (0.6, 0.25), (0.6, 0), (1, 0.5), (0.6, 1), (0.6, 0.75), (0, 0.75)]
     if direction == "right":
@@ -435,8 +492,10 @@ NET = "Réseau"
 UML = "UML / Logiciel"
 CFF = "Diagramme de flux interfonctionnel"
 BPMN = "BPMN"
+CIRCUIT = "Schéma électrique"
+FLOORPLAN = "Plan d’aménagement"
 
-CATEGORIES = (BASIC, FLOW, BPMN, CFF, ARROWS_CAT, ORG, NET, UML)
+CATEGORIES = (BASIC, FLOW, BPMN, CFF, FLOORPLAN, CIRCUIT, ARROWS_CAT, ORG, NET, UML)
 
 _TRI_PORTS = ((0.5, 0.0), (0.75, 0.5), (0.5, 1.0), (0.25, 0.5))
 _LABEL_BELOW = (-0.6, 1.04, 2.2, 0.55)
@@ -653,6 +712,50 @@ _DEFS: list[ShapeDef] = [
     ShapeDef("bpmn.datastore", "Magasin de données", BPMN, _b_cylinder, (24, 28),
              text_rect=(0, 0.25, 1, 0.65), keywords="data store base de données bpmn",
              style={"fill": "#ffffff", "line": "#404040", "themed": False}),
+
+    # Plan d'aménagement et mobilier de bureau.
+    ShapeDef("floor.room", "Pièce", FLOORPLAN, _b_rect, (180, 120), SIDES_AND_CORNERS,
+             text_rect=(0.03, 0.03, 0.94, 0.18), keywords="room plan pièce bureau",
+             style={"fill": "#f8f9fb", "line": "#404040", "line_width": 2.0, "themed": False},
+             text={"halign": "left", "valign": "top"}, container=True, default_text="Pièce"),
+    ShapeDef("floor.wall", "Mur", FLOORPLAN, _b_rect, (60, 12), SIDES_AND_CORNERS,
+             keywords="wall cloison",
+             style={"fill": "#7f7f7f", "line": "#404040", "themed": False}),
+    ShapeDef("floor.door", "Porte", FLOORPLAN, _unit(_floor_door), (30, 30),
+             keywords="door ouverture",
+             style={"fill": "", "line": "#404040", "line_width": 1.5, "themed": False}),
+    ShapeDef("floor.window", "Fenêtre", FLOORPLAN, _floor_window, (42, 10),
+             keywords="window baie vitrée",
+             style={"fill": "#d9eaf7", "line": "#404040", "themed": False}),
+    ShapeDef("floor.desk", "Bureau", FLOORPLAN, _floor_desk, (38, 25), keywords="desk mobilier",
+             style={"fill": "#d6c2a1", "line": "#6b5b45", "themed": False}),
+    ShapeDef("floor.table", "Table", FLOORPLAN, _b_ellipse, (40, 28), keywords="table mobilier",
+             style={"fill": "#d6c2a1", "line": "#6b5b45", "themed": False}),
+    ShapeDef("floor.chair", "Chaise", FLOORPLAN, _b_round, (22, 22), keywords="chair siège mobilier",
+             style={"fill": "#b4c7e7", "line": "#44546a", "themed": False}),
+    ShapeDef("floor.bed", "Lit", FLOORPLAN, _unit(_b_container), (45, 65),
+             text_rect=(0.08, 0.2, 0.84, 0.75), keywords="bed chambre mobilier",
+             style={"fill": "#e2f0d9", "line": "#548235", "themed": False}),
+    ShapeDef("floor.stairs", "Escalier", FLOORPLAN, _floor_stairs, (35, 65),
+             keywords="stairs marches",
+             style={"fill": "#eeeeee", "line": "#404040", "themed": False}),
+
+    # Symboles électriques de base.
+    ShapeDef("circuit.resistor", "Résistance", CIRCUIT, _unit(_circuit_resistor), (40, 12),
+             keywords="resistor ohm composant",
+             style={"fill": "", "line": "#202020", "themed": False}),
+    ShapeDef("circuit.capacitor", "Condensateur", CIRCUIT, _unit(_circuit_capacitor), (24, 18),
+             keywords="capacitor capacité composant",
+             style={"fill": "", "line": "#202020", "themed": False}),
+    ShapeDef("circuit.battery", "Pile", CIRCUIT, _unit(_circuit_battery), (24, 18),
+             keywords="battery batterie alimentation",
+             style={"fill": "", "line": "#202020", "themed": False}),
+    ShapeDef("circuit.ground", "Masse", CIRCUIT, _unit(_circuit_ground), (18, 20),
+             keywords="ground terre électrique",
+             style={"fill": "", "line": "#202020", "themed": False}),
+    ShapeDef("circuit.lamp", "Lampe", CIRCUIT, _unit(_circuit_lamp), (20, 20),
+             keywords="ampoule light",
+             style={"fill": "#fff2cc", "line": "#202020", "themed": False}),
 ]
 
 _CFF_STYLE = {"fill": "#dce6f2", "line": "#7f9cc9", "themed": False}

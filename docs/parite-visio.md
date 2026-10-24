@@ -7,7 +7,7 @@ et sans reprendre les éléments de marque ou le code propriétaire de Microsoft
 
 | Domaine | LinXdiagram aujourd’hui | Écart à traiter |
 |---|---|---|
-| Création et mise en page | Ruban, gabarits, pages, groupes, thèmes, connecteurs, règles, grille, guides, calques et validation ; premier gabarit BPMN 2.0 | Élargir les gabarits BPMN et ajouter les plans et familles d’ingénierie |
+| Création et mise en page | Ruban, gabarits, pages, groupes, thèmes, connecteurs, règles, grille, guides, calques et validation ; gabarits initiaux BPMN, plan de bureau et circuit | Étendre les bibliothèques BPMN, architecture et ingénierie |
 | Navigation dans le dessin | Explorateur de dessin filtrable : formes, groupes et connecteurs de la page active | Explorer aussi les pages, calques, objets imbriqués et propriétés du document |
 | Données | Création d’organigrammes et de flux depuis CSV ; données libres par forme et rapports CSV | Liens persistants aux lignes, rafraîchissement des sources et graphiques de données |
 | Fichiers Visio | Import/export VSDX, formes, pages, styles, connecteurs et plusieurs métadonnées | Les formules ShapeSheet ne sont pas exécutées ; VSD binaire, EMF/WMF et objets OLE ne sont pas pris en charge |
@@ -18,7 +18,7 @@ et sans reprendre les éléments de marque ou le code propriétaire de Microsoft
 ## Ordre de travail proposé
 
 1. Compléter l’exploration et les outils de navigation du document.
-2. Compléter BPMN et ajouter les gabarits métiers les plus utilisés (plans et ingénierie).
+2. Étendre BPMN, architecture et les bibliothèques d’ingénierie.
 3. Ajouter les graphiques de données et les liens/rafraîchissements de fichiers locaux.
 4. Améliorer la fidélité des aller-retours VSDX et documenter chaque élément non pris en charge.
 5. Garder la coédition et les services cloud hors périmètre tant que l’application reste orientée poste de travail hors ligne.
