@@ -37,8 +37,9 @@ Carlito (métriquement identique à Calibri) est utilisée si elle est installé
   dialogue ↘, réduction du ruban (Ctrl+F1 ou double-clic sur un onglet).
 * **Volet Formes** : onglets FORMES / RECHERCHER, « Plus de formes », Formes rapides, gabarits ouverts,
   liste à deux colonnes, glisser-déposer.
-* Gabarits métier de départ : processus **BPMN 2.0**, plan de bureau et schéma électrique, avec leurs
-  formes et leurs modèles de document.
+* Gabarits métier de départ : processus **BPMN 2.0** (événements message, minuterie, erreur et signal ;
+  tâches utilisateur, service, script, manuelles, d’envoi/réception et de règle métier ; passerelles
+  événementielle et complexe), plan de bureau et schéma électrique, avec leurs formes et modèles.
 * **Volets de tâches** : Format de la forme (Remplissage et trait, Effets, Texte, Taille et
   propriétés), Taille et position, Données de forme, Commentaires, Problèmes, Panoramique et zoom,
   et **Explorateur de dessin** avec recherche par texte ou données, filtre par calque, sélection des

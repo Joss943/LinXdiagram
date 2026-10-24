@@ -389,12 +389,57 @@ def _bpmn_event(ring: str = "start"):
     return outline, detail
 
 
+def _bpmn_event_marker(kind: str) -> QPainterPath:
+    if kind == "timer":
+        marker = _ellipse(0.5, 0.5, 0.34, 0.34)
+        marker.addPath(_lines([(0.5, 0.22), (0.5, 0.5), (0.7, 0.61)],
+                              [(0.4, 0.08), (0.6, 0.08)]))
+        return marker
+    if kind == "message":
+        marker = _rect(0.12, 0.27, 0.76, 0.48)
+        marker.addPath(_lines([(0.12, 0.27), (0.5, 0.56), (0.88, 0.27)]))
+        return marker
+    if kind == "error":
+        return _poly_path([(0.58, 0.02), (0.3, 0.48), (0.48, 0.48),
+                           (0.38, 0.98), (0.74, 0.4), (0.55, 0.4)])
+    if kind == "signal":
+        return _poly_path([(0.5, 0.08), (0.9, 0.86), (0.1, 0.86)])
+    if kind == "escalation":
+        return _poly_path([(0.5, 0.06), (0.82, 0.36), (0.62, 0.36), (0.82, 0.58),
+                           (0.5, 0.9), (0.18, 0.58), (0.38, 0.58), (0.18, 0.36), (0.38, 0.36)])
+    return QPainterPath()
+
+
+def _bpmn_typed_event(kind: str, stage: str, filled: bool = False):
+    outline = _ellipse(0.5, 0.5, 0.48, 0.48)
+    detail = QPainterPath()
+    if stage == "intermediate":
+        detail.addPath(_ellipse(0.5, 0.5, 0.38, 0.38))
+    elif stage == "end":
+        if filled:
+            ring = _ellipse(0.5, 0.5, 0.42, 0.42).subtracted(_ellipse(0.5, 0.5, 0.33, 0.33))
+            detail.addPath(ring)
+        else:
+            detail.addPath(_ellipse(0.5, 0.5, 0.34, 0.34))
+    marker = _bpmn_event_marker(kind)
+    marker_size = {"start": 0.46, "intermediate": 0.34, "end": 0.29}[stage]
+    detail.addPath(_fit(marker, marker_size, marker_size).translated(
+        QPointF(0.5 - marker_size / 2, 0.5 - marker_size / 2)))
+    return outline, detail
+
+
 def _bpmn_gateway(marker: str = "xor"):
     outline = _poly_path([(0.5, 0), (1, 0.5), (0.5, 1), (0, 0.5)])
     if marker == "parallel":
         detail = _lines([(0.5, 0.28), (0.5, 0.72)], [(0.28, 0.5), (0.72, 0.5)])
     elif marker == "inclusive":
         detail = _ellipse(0.5, 0.5, 0.14, 0.14)
+    elif marker == "event":
+        detail = _poly_path([(0.5, 0.23), (0.73, 0.39), (0.65, 0.67),
+                             (0.35, 0.67), (0.27, 0.39)])
+    elif marker == "complex":
+        detail = _lines([(0.5, 0.24), (0.5, 0.76)], [(0.24, 0.5), (0.76, 0.5)],
+                        [(0.31, 0.31), (0.69, 0.69)], [(0.69, 0.31), (0.31, 0.69)])
     else:
         detail = _lines([(0.38, 0.38), (0.62, 0.62)], [(0.62, 0.38), (0.38, 0.62)])
     return outline, detail
@@ -404,6 +449,56 @@ def _bpmn_task(w: float, h: float):
     p = QPainterPath()
     p.addRoundedRect(QRectF(0, 0, w, h), min(w, h) * 0.1, min(w, h) * 0.1)
     return p, None
+
+
+def _bpmn_task_marker(kind: str) -> QPainterPath:
+    if kind == "user":
+        marker = _ellipse(0.5, 0.2, 0.15, 0.15)
+        marker.addPath(_lines([(0.17, 0.9), (0.2, 0.65), (0.5, 0.48), (0.8, 0.65), (0.83, 0.9)]))
+        return marker
+    if kind == "service":
+        marker = _ellipse(0.5, 0.5, 0.23, 0.23)
+        for angle in range(0, 360, 45):
+            a = math.radians(angle)
+            marker.addPath(_lines([(0.5 + 0.25 * math.cos(a), 0.5 + 0.25 * math.sin(a)),
+                                   (0.5 + 0.42 * math.cos(a), 0.5 + 0.42 * math.sin(a))]))
+        return marker
+    if kind == "script":
+        marker = _poly_path([(0.22, 0.08), (0.62, 0.08), (0.8, 0.26), (0.8, 0.92), (0.22, 0.92)])
+        marker.addPath(_lines([(0.62, 0.08), (0.62, 0.26), (0.8, 0.26)],
+                              [(0.32, 0.48), (0.69, 0.48)], [(0.32, 0.63), (0.69, 0.63)],
+                              [(0.32, 0.78), (0.58, 0.78)]))
+        return marker
+    if kind == "manual":
+        return _poly_path([(0.16, 0.62), (0.17, 0.36), (0.29, 0.34), (0.34, 0.59),
+                           (0.37, 0.14), (0.49, 0.13), (0.53, 0.57), (0.58, 0.08),
+                           (0.7, 0.1), (0.69, 0.58), (0.76, 0.23), (0.87, 0.29),
+                           (0.78, 0.79), (0.61, 0.92), (0.31, 0.88)])
+    if kind in ("send", "receive"):
+        marker = _rect(0.15, 0.35, 0.7, 0.48)
+        marker.addPath(_lines([(0.15, 0.35), (0.5, 0.62), (0.85, 0.35)]))
+        if kind == "send":
+            marker.addPath(_lines([(0.5, 0.02), (0.5, 0.25)], [(0.37, 0.16), (0.5, 0.29), (0.63, 0.16)]))
+        else:
+            marker.addPath(_lines([(0.5, 0.3), (0.5, 0.05)], [(0.37, 0.17), (0.5, 0.04), (0.63, 0.17)]))
+        return marker
+    if kind == "rule":
+        marker = _rect(0.12, 0.16, 0.76, 0.68)
+        marker.addPath(_lines([(0.12, 0.4), (0.88, 0.4)], [(0.12, 0.62), (0.88, 0.62)],
+                              [(0.5, 0.4), (0.5, 0.84)]))
+        return marker
+    return QPainterPath()
+
+
+def _bpmn_typed_task(kind: str):
+    def build(w: float, h: float):
+        outline = QPainterPath()
+        outline.addRoundedRect(QRectF(0, 0, w, h), min(w, h) * 0.1, min(w, h) * 0.1)
+        marker_size = min(w, h) * 0.3
+        detail = _fit(_bpmn_task_marker(kind), marker_size, marker_size).translated(
+            QPointF(w * 0.06, h * 0.06))
+        return outline, detail
+    return build
 
 
 def _bpmn_subprocess(w: float, h: float):
@@ -690,7 +785,58 @@ _DEFS: list[ShapeDef] = [
     ShapeDef("bpmn.end", "Événement de fin", BPMN, _unit(lambda: _bpmn_event("end")), (18, 18),
              text_rect=_LABEL_BELOW, label_outside=True, keywords="end event fin bpmn",
              style={"fill": "#ffffff", "line": "#404040", "line_width": 2.25, "themed": False}),
+    ShapeDef("bpmn.message_start", "Début par message", BPMN,
+             _unit(lambda: _bpmn_typed_event("message", "start")), (18, 18),
+             text_rect=_LABEL_BELOW, label_outside=True, keywords="message start événement réception bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "themed": False}),
+    ShapeDef("bpmn.message_intermediate", "Événement de message", BPMN,
+             _unit(lambda: _bpmn_typed_event("message", "intermediate")), (18, 18),
+             text_rect=_LABEL_BELOW, label_outside=True, keywords="message intermédiaire bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "themed": False}),
+    ShapeDef("bpmn.timer_start", "Début temporisé", BPMN,
+             _unit(lambda: _bpmn_typed_event("timer", "start")), (18, 18),
+             text_rect=_LABEL_BELOW, label_outside=True, keywords="timer délai déclencheur horloge bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "themed": False}),
+    ShapeDef("bpmn.timer_intermediate", "Événement temporel", BPMN,
+             _unit(lambda: _bpmn_typed_event("timer", "intermediate")), (18, 18),
+             text_rect=_LABEL_BELOW, label_outside=True, keywords="timer intermédiaire horloge bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "themed": False}),
+    ShapeDef("bpmn.error_end", "Fin par erreur", BPMN,
+             _unit(lambda: _bpmn_typed_event("error", "end", True)), (18, 18),
+             text_rect=_LABEL_BELOW, label_outside=True, keywords="erreur exception end bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "line_width": 2.25, "themed": False},
+             detail_fill=True),
+    ShapeDef("bpmn.signal_start", "Début par signal", BPMN,
+             _unit(lambda: _bpmn_typed_event("signal", "start")), (18, 18),
+             text_rect=_LABEL_BELOW, label_outside=True, keywords="signal start bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "themed": False}),
+    ShapeDef("bpmn.signal_end", "Fin par signal", BPMN,
+             _unit(lambda: _bpmn_typed_event("signal", "end", True)), (18, 18),
+             text_rect=_LABEL_BELOW, label_outside=True, keywords="signal end bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "line_width": 2.25, "themed": False},
+             detail_fill=True),
     ShapeDef("bpmn.task", "Tâche", BPMN, _bpmn_task, (42, 25), keywords="activité task activity bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "themed": False}),
+    ShapeDef("bpmn.user_task", "Tâche utilisateur", BPMN, _bpmn_typed_task("user"), (42, 25),
+             keywords="user task personne humaine formulaire bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "themed": False}),
+    ShapeDef("bpmn.service_task", "Tâche de service", BPMN, _bpmn_typed_task("service"), (42, 25),
+             keywords="service automatisation api engrenage bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "themed": False}),
+    ShapeDef("bpmn.script_task", "Tâche de script", BPMN, _bpmn_typed_task("script"), (42, 25),
+             keywords="script code document bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "themed": False}),
+    ShapeDef("bpmn.manual_task", "Tâche manuelle", BPMN, _bpmn_typed_task("manual"), (42, 25),
+             keywords="manual main humaine opérateur bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "themed": False}),
+    ShapeDef("bpmn.send_task", "Tâche d’envoi", BPMN, _bpmn_typed_task("send"), (42, 25),
+             keywords="send envoyer message communication bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "themed": False}),
+    ShapeDef("bpmn.receive_task", "Tâche de réception", BPMN, _bpmn_typed_task("receive"), (42, 25),
+             keywords="receive recevoir message communication bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "themed": False}),
+    ShapeDef("bpmn.rule_task", "Tâche de règle métier", BPMN, _bpmn_typed_task("rule"), (42, 25),
+             keywords="business rule table décision bpmn",
              style={"fill": "#ffffff", "line": "#404040", "themed": False}),
     ShapeDef("bpmn.subprocess", "Sous-processus", BPMN, _bpmn_subprocess, (42, 25),
              keywords="activité imbriquée subprocess bpmn",
@@ -705,6 +851,14 @@ _DEFS: list[ShapeDef] = [
     ShapeDef("bpmn.gateway_inclusive", "Passerelle inclusive", BPMN,
              _unit(lambda: _bpmn_gateway("inclusive")), (22, 22), text_rect=_LABEL_BELOW,
              label_outside=True, keywords="gateway inclusive bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "themed": False}),
+    ShapeDef("bpmn.gateway_event", "Passerelle événementielle", BPMN,
+             _unit(lambda: _bpmn_gateway("event")), (22, 22), text_rect=_LABEL_BELOW,
+             label_outside=True, keywords="gateway événement event bpmn",
+             style={"fill": "#ffffff", "line": "#404040", "themed": False}),
+    ShapeDef("bpmn.gateway_complex", "Passerelle complexe", BPMN,
+             _unit(lambda: _bpmn_gateway("complex")), (22, 22), text_rect=_LABEL_BELOW,
+             label_outside=True, keywords="gateway règle complexe bpmn",
              style={"fill": "#ffffff", "line": "#404040", "themed": False}),
     ShapeDef("bpmn.data", "Objet de données", BPMN, _unit(_b_note), (22, 28),
              text_rect=(0.05, 0.2, 0.75, 0.7), keywords="data object document bpmn",
