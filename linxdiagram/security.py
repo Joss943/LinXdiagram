@@ -16,6 +16,7 @@ import contextlib
 import ctypes
 import ctypes.util
 import hashlib
+import html
 import json
 import os
 import re
@@ -37,14 +38,15 @@ class WrongPasswordError(SecurityError):
 # --------------------------------------------------------------------------- texte
 
 _CONTROL_RE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
-_BIDI_RE = re.compile("[‪-‮⁦-⁩‎‏؜]")
+_BIDI_RE = re.compile("[‪-‮⁦-⁩⁪-⁯‎‏؜]")
 _LINE_RE = re.compile("[\r\n\t]")
 
 
 def clean_text(value: str, maxlen: int) -> str:
-    """Texte multiligne : supprime les caractères de contrôle, garde \\n et \\t."""
+    """Texte multiligne : retire les contrôles et marques bidi, garde \n et \t."""
     value = value.replace("\r\n", "\n").replace("\r", "\n")
     value = _CONTROL_RE.sub("", value)
+    value = _BIDI_RE.sub("", value)
     return value[:maxlen]
 
 
@@ -54,6 +56,12 @@ def clean_line(value: str, maxlen: int) -> str:
     value = _CONTROL_RE.sub("", value)
     value = _BIDI_RE.sub("", value)
     return value.strip()[:maxlen]
+
+
+def tooltip_html(value: str, maxlen: int = 5000) -> str:
+    """Texte non fiable affichable en infobulle Qt riche sans interpréter son contenu."""
+    value = clean_text(value if isinstance(value, str) else str(value), maxlen)
+    return "<span>" + html.escape(value, quote=True).replace("\n", "<br/>") + "</span>"
 
 
 SAFE_URL_SCHEMES = ("http", "https", "mailto")
@@ -76,10 +84,16 @@ def safe_url(value: str) -> str | None:
         parts = urlsplit(value)
     except ValueError:
         return None
-    if parts.scheme.lower() not in SAFE_URL_SCHEMES:
+    scheme = parts.scheme.lower()
+    if scheme not in SAFE_URL_SCHEMES:
         return None
-    if parts.scheme.lower() in ("http", "https") and not parts.netloc:
-        return None
+    if scheme in ("http", "https"):
+        if not parts.hostname or parts.username is not None or parts.password is not None:
+            return None
+        try:
+            _ = parts.port  # urlsplit diffère la validation du numéro de port à cette propriété.
+        except ValueError:
+            return None
     return value
 
 
@@ -226,7 +240,7 @@ ENCRYPTED_FORMAT = "linxdiagram-encrypted"
 _SCRYPT_N = 2 ** 17
 _SCRYPT_R = 8
 _SCRYPT_P = 1
-_SCRYPT_MAXMEM = 600 * 1024 * 1024
+_SCRYPT_MAXMEM = 320 * 1024 * 1024
 
 
 class _OpenSSLGCM:
@@ -341,6 +355,8 @@ def encryption_available() -> bool:
 
 def _derive_key(password: str, salt: bytes, n: int, r: int, p: int) -> bytes:
     pw = unicodedata.normalize("NFC", password).encode("utf-8")
+    if len(pw) > 4096:
+        raise SecurityError("Le mot de passe dépasse la limite de 4 096 octets.")
     return hashlib.scrypt(pw, salt=salt, n=n, r=r, p=p, maxmem=_SCRYPT_MAXMEM, dklen=32)
 
 
@@ -372,21 +388,27 @@ def decrypt_payload(envelope: dict, password: str) -> bytes:
     try:
         header = {k: envelope[k] for k in
                   ("format", "version", "cipher", "kdf", "n", "r", "p", "salt", "nonce")}
-        if header["version"] != 1 or header["cipher"] != "AES-256-GCM" or header["kdf"] != "scrypt":
+        version = header["version"]
+        if (not isinstance(version, int) or isinstance(version, bool) or version != 1
+                or header["cipher"] != "AES-256-GCM" or header["kdf"] != "scrypt"):
             raise SecurityError("Méthode de chiffrement non prise en charge.")
         n, r, p = header["n"], header["r"], header["p"]
         if not all(isinstance(v, int) and not isinstance(v, bool) for v in (n, r, p)):
             raise SecurityError("Paramètres de chiffrement invalides.")
         # Bornes : un fichier piégé ne doit pas pouvoir épuiser la mémoire.
-        if not (2 ** 14 <= n <= 2 ** 20 and n & (n - 1) == 0 and 1 <= r <= 16 and 1 <= p <= 4
-                and 128 * n * r <= 512 * 1024 * 1024):
+        if not (2 ** 14 <= n <= 2 ** 18 and n & (n - 1) == 0 and 1 <= r <= 8 and 1 <= p <= 2
+                and 128 * n * r <= 256 * 1024 * 1024):
             raise SecurityError("Paramètres de dérivation de clé hors limites.")
+        if (not isinstance(header["salt"], str) or len(header["salt"]) != 24
+                or not isinstance(header["nonce"], str) or len(header["nonce"]) != 16
+                or not isinstance(envelope["data"], str)):
+            raise SecurityError("Enveloppe chiffrée invalide.")
         salt = base64.b64decode(header["salt"], validate=True)
         nonce = base64.b64decode(header["nonce"], validate=True)
         data = base64.b64decode(envelope["data"], validate=True)
     except (KeyError, TypeError, ValueError) as exc:
         raise SecurityError("Enveloppe chiffrée invalide.") from exc
-    if len(salt) < 16 or len(nonce) != 12:
+    if len(salt) != 16 or len(nonce) != 12:
         raise SecurityError("Enveloppe chiffrée invalide.")
     key = _derive_key(password, salt, n, r, p)
     return _cipher().decrypt(key, nonce, data, _aad(header))

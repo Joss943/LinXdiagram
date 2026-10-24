@@ -10,7 +10,7 @@ from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QTransform
 from PyQt6.QtWidgets import QFrame, QGraphicsView, QGridLayout, QWidget
 
 from .items import ConnectorItem, ShapeItem
-from .scene import CANVAS_BG
+from .scene import paint_canvas_backdrop
 from .units import GRID_PX, PX_PER_MM
 
 STENCIL_MIME = "application/x-linxdiagram-stencil"
@@ -32,7 +32,10 @@ class DiagramView(QGraphicsView):
         self.setRubberBandSelectionMode(Qt.ItemSelectionMode.ContainsItemShape)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
-        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
+        # SmartViewportUpdate redraws only the changed areas for ordinary edits, then
+        # falls back to a larger redraw when many regions change at once. This keeps
+        # large diagrams responsive without leaving stale grid or guide pixels behind.
+        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.SmartViewportUpdate)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setAcceptDrops(True)
         self.setMouseTracking(True)
@@ -445,7 +448,7 @@ class OverviewView(QGraphicsView):
 
     def drawBackground(self, painter, rect):  # noqa: N802
         sc = self.scene()
-        painter.fillRect(rect, CANVAS_BG)
+        paint_canvas_backdrop(painter, rect)
         if sc is not None:
             painter.fillRect(sc.page_rect(), QColor(sc.page_bg))
 

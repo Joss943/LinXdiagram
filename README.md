@@ -30,30 +30,43 @@ Carlito (métriquement identique à Calibri) est utilisée si elle est installé
 * **Barre de titre** bleue façon Office : barre d'outils Accès rapide (Enregistrer, Annuler avec
   historique, Rétablir), titre du document et zone **« Rechercher (Alt+Q) »** qui trouve et lance
   n'importe quelle commande ou insère une forme par son nom.
+* Thème de bureau inspiré d’Office 2024 : bleu plus vif, onglets et ruban lumineux, canevas gris
+  doux avec feuille blanche ombrée ; volets Formes et propriétés de part et d’autre du canevas.
 * **Ruban** à neuf onglets : Accueil, Insertion, Création, Données, Processus, Révision, Affichage,
   Développeur, Aide ; grands et petits boutons, boutons partagés, galeries, lanceurs de boîte de
   dialogue ↘, réduction du ruban (Ctrl+F1 ou double-clic sur un onglet).
 * **Volet Formes** : onglets FORMES / RECHERCHER, « Plus de formes », Formes rapides, gabarits ouverts,
-  liste à deux colonnes, glisser-déposer. Gabarits : formes de base, diagramme de flux, couloirs,
-  flèches, **diagramme de blocs**, **BPMN de base**, organigramme, réseau, UML, **base de données
-  (entité-relation)** et **chronologie**, avec les modèles correspondants dans Fichier > Nouveau.
+  liste à deux colonnes, glisser-déposer.
+* **Nouveau diagramme** : catalogue local de 84 types dans les familles processus, entreprise, réseau,
+  plans, logiciel et données, calendrier et ingénierie. Chaque choix ouvre une page vierge avec le
+  gabarit de formes et l’orientation adaptés ; les diagrammes interfonctionnels ne contiennent que
+  des couloirs vides. Les formes BPMN 2.0 comprennent notamment événements, tâches et passerelles spécialisés.
+* **Gabarits ajoutés** : diagramme de blocs, base de données (entité-relation : entités, relations,
+  attributs, tables, vues) et chronologie (ligne de temps, jalons, intervalles), en plus du BPMN 2.0.
 * **Volets de tâches** : Format de la forme (Remplissage et trait, Effets, Texte, Taille et
-  propriétés), Taille et position, Données de forme, Commentaires, Problèmes, Panoramique et zoom.
+  propriétés), Taille et position, Données de forme, Commentaires, Problèmes, Panoramique et zoom,
+  et **Explorateur de dessin** avec recherche par texte ou données, filtre par calque, sélection des
+  formes, groupes et connecteurs, et navigation sur toutes les pages du document.
 * **Onglets de pages** avec navigation ◀ ▶, menu « Tout » et ⊕ ; **barre d'état** avec page, taille et
   angle de la sélection, langue, mode Présentation et curseur de zoom.
-* **Menu Fichier** façon Microsoft 365 : Accueil (« Bonjour », vignettes de modèles, récents),
+* **Menu Fichier** façon Microsoft 365 : Accueil (« Bonjour », vignettes de diagrammes vierges, récents),
   Nouveau, Ouvrir, Informations (protection, propriétés), Imprimer avec **aperçu intégré**, Exporter.
 * **Menu contextuel avec mini-barre** (police, taille, gras, style rapide, remplissage, trait).
 * Thème **« En couleur »** par défaut, thème **Noir** disponible (Fichier > Options).
+* La largeur des volets Formes et Format, ainsi que l'état du ruban réduit, sont mémorisés entre
+  les sessions. Le canevas ne redessine que les zones modifiées lorsque c'est possible, ce qui
+  améliore la réactivité des grands diagrammes.
+* La compatibilité et les écarts restants par rapport à Visio sont suivis dans
+  [la feuille de route de parité](docs/parite-visio.md).
 
 ## Fonctions Visio
 
 | Onglet | Fonctions |
 |---|---|
-| Accueil | Coller, couper, copier, reproduire la mise en forme ; police, taille, A⁺/A⁻, effacer la mise en forme, gras, italique, souligné, barré, casse ; alignements ; Pointeur, Connecteur, Texte, outils de dessin (rectangle, ellipse, ligne, forme libre, arc, crayon) ; **Styles rapides** (35 styles), Remplissage, Trait (couleur, épaisseur, tirets, flèches), Effets (ombre, lumière, dégradé) ; Aligner, Position (**Aligner automatiquement et espacer**, espacement automatique, distribuer), Premier plan, Arrière-plan, Grouper ; **Modifier la forme**, Calques, Sélectionner par type, Rechercher / Remplacer |
+| Accueil | Coller, couper, copier, reproduire la mise en forme ; police, taille, A⁺/A⁻, effacer la mise en forme, gras, italique, souligné, barré, casse ; alignements ; Pointeur, Connecteur, Texte, outils de dessin (rectangle, ellipse, ligne, forme libre, arc) dont **Stylo à main levée** (Ctrl+7) ; **Styles rapides** (35 styles), Remplissage, Trait (couleur, épaisseur, tirets, flèches), Effets (ombre, lumière, dégradé) ; Aligner, Position (**Aligner automatiquement et espacer**, espacement automatique, distribuer), Premier plan, Arrière-plan, Grouper ; **Modifier la forme**, Calques, Sélectionner par type, Rechercher / Remplacer |
 | Insertion | Page vierge, dupliquer, renommer, supprimer ; Images ; Conteneur, Légende, Connecteur ; Lien (web ou page du document) ; Zone de texte, Info-bulle d'écran, Symbole |
 | Création | Orientation, Taille, **Taille automatique**, Mise en page ; **Thèmes** et **Variantes** ; Arrière-plans, **Bordures et titres** ; **Redisposer la page**, Connecteurs, **sauts de ligne** |
-| Données | **Créer à partir de données** (organigramme ou diagramme de flux depuis un CSV), fenêtre Données de forme, **Rapports de forme** (CSV) |
+| Données | **Créer à partir de données** (organigramme ou diagramme de flux depuis un CSV), lier chaque forme à plusieurs fichiers CSV locaux par clé et actualiser toutes les sources à la demande, noms de colonnes préfixés automatiquement en cas de conflit, **graphiques de données** (étiquette et valeur, valeur seule ou pastille de statut avec couleurs configurables), fenêtre Données de forme, **Rapports de forme** (CSV). À l’export VSDX, les graphiques deviennent des annotations vectorielles statiques et séparables dans Visio ; les métadonnées LinXdiagram rétablissent leur association et leurs règles de couleur au réimport. |
 | Processus | **Sous-processus** à partir de la sélection, **Vérifier le diagramme**, fenêtre Problèmes |
 | Diagramme de flux interfonctionnel (contextuel) | Couloir (avant / après), Séparateur, nouveau diagramme horizontal ou vertical, Disposer les couloirs, Orientation du diagramme, Faire pivoter les étiquettes, Styles, Barre de titre, Séparateurs |
 | Révision | **Commentaires** (nouveau, précédent, suivant, supprimer, volet), **verrouiller les formes**, protéger le document |
@@ -122,23 +135,29 @@ Aucun code de Microsoft n'est utilisé ni décompilé.
   (contrairement aux macros VBA de Visio).
 * **Format `.lxd` en JSON strictement validé** : liste blanche des champs, nombres finis
   et bornés, tailles et quantités limitées, empreinte SHA-256 contre l'altération.
-* **Chiffrement par mot de passe** : AES-256-GCM (OpenSSL) et dérivation scrypt ;
+* **Chiffrement par mot de passe** : AES-256-GCM (OpenSSL) et dérivation scrypt aux
+  paramètres bornés pour empêcher un fichier piégé d'épuiser la mémoire ;
   vérifié avec le vecteur de test officiel du NIST. Les copies de récupération d'un
   document chiffré restent chiffrées.
 * **Import VSDX blindé** : protection contre les bombes de décompression, XML avec
-  DTD refusé (XXE, « billion laughs »), chemins normalisés, aucune ressource externe.
+  DTD refusé (XXE, « billion laughs »), XML non UTF-8 et parties ZIP ambiguës refusés,
+  chemins normalisés, aucune ressource externe.
 * **Images** : PNG/JPEG uniquement, décodées avec plafond mémoire, ré-encodées à
   l'insertion pour retirer les métadonnées (EXIF, GPS).
-* **Liens** : http, https et mailto seulement, confirmation avant ouverture.
+* **Liens** : http, https et mailto seulement, sans identifiants intégrés, confirmation avant ouverture.
+* **Contenu utilisateur** : texte de document affiché comme texte brut dans les infobulles ; formules
+  CSV neutralisées cellule par cellule dans les rapports.
 * **Fichiers** : écriture atomique, nouveaux documents en droits 0600, lecture
   bornée (pas de FIFO ni de périphérique), pas de core dump.
-* **Aucune connexion réseau**, aucune télémétrie ; collage en texte brut uniquement.
+* **Aucune connexion réseau en arrière-plan**, aucune télémétrie ; les liens web ne s'ouvrent
+  dans le navigateur qu'après une action et une confirmation ; collage en texte brut uniquement.
 * **Flatpak** (`packaging/flatpak`) : bac à sable sans accès réseau.
 
 ## Confidentialité (RGPD)
 
-Aucune donnée n'est collectée ni transmise : pas de connexion réseau, de télémétrie ni de
-compte. Tout reste sur votre ordinateur ; le nom de connexion du système n'est jamais inscrit
+Aucune donnée n'est collectée ni transmise par LinXdiagram : pas de service cloud, de télémétrie
+ni de compte. Les liens web sont ouverts uniquement sur demande dans le navigateur du système.
+Tout reste sur votre ordinateur ; le nom de connexion du système n'est jamais inscrit
 dans les documents. Détails et emplacements des fichiers locaux : [PRIVACY.md](PRIVACY.md).
 
 ## Accessibilité

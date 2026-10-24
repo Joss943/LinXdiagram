@@ -6,8 +6,9 @@ LinXdiagram est conçu pour respecter le Règlement général sur la protection 
 ## Ce que l'application ne fait pas
 
 * **Aucune collecte** : l'auteur du logiciel ne reçoit aucune donnée, personnelle ou non.
-* **Aucune connexion réseau** : pas de télémétrie, de statistiques d'usage, de rapport de plantage
-  envoyé, de vérification de mise à jour ni de chargement de ressources en ligne.
+* **Aucune connexion réseau en arrière-plan** : pas de télémétrie, de statistiques d'usage, de rapport de plantage
+  envoyé, de vérification de mise à jour ni de chargement de ressources en ligne. Les liens web
+  ne sont ouverts dans le navigateur qu'après une action et une confirmation.
 * **Aucun compte** et aucun identifiant publicitaire.
 * Le nom de connexion du système n'est **jamais** inscrit dans les documents.
 

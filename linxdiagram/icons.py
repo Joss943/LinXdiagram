@@ -409,13 +409,11 @@ def _ellipse_tool(c):
     c.ellipse(16, 16, 13, 9.5, fill=PAPER, stroke=INK)
 
 
-@_reg("pencil", "tool_pencil")
-def _pencil(c):
-    p = QPainterPath(QPointF(4, 24))
-    p.cubicTo(8, 14, 12, 28, 17, 18)
-    p.cubicTo(20, 12, 24, 16, 28, 8)
-    c.path(p, stroke=INK, sw=1.5)
-    c.poly([(22, 3), (29, 10), (17, 22), (10, 22), (10, 15)], fill=BLUE_L, stroke=BLUE)
+@_reg("pen_tool", "tool_pen")
+def _pen_tool(c):
+    c.line(7, 24, 23, 8, INK, 3)
+    c.poly([(5, 27), (7, 21), (11, 25)], fill=YELLOW, stroke=INK)
+    c.line(20, 7, 24, 11, BLUE, 2)
 
 
 @_reg("freeform", "tool_freeform")

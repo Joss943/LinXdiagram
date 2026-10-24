@@ -3,7 +3,9 @@ position, Données de forme, Commentaires, Problèmes, Panoramique et zoom."""
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QMimeData, QRect, QSize, Qt, pyqtSignal
+import os
+
+from PyQt6.QtCore import QMimeData, QRect, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QIcon, QPainter
 from PyQt6.QtWidgets import (QSizePolicy, QAbstractItemView, QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox,
                              QFontComboBox, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
@@ -169,6 +171,7 @@ class ShapesPane(QWidget):
     shapeActivated = pyqtSignal(str)
     quickShapeChanged = pyqtSignal(str)
     categoriesChanged = pyqtSignal()
+    closed = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -186,6 +189,13 @@ class ShapesPane(QWidget):
         title.setObjectName("PaneTitle")
         head.addWidget(title)
         head.addStretch(1)
+        close = QToolButton()
+        close.setObjectName("PaneClose")
+        close.setIcon(icons.icon("win_close"))
+        close.setIconSize(QSize(14, 14))
+        close.setToolTip("Fermer le volet Formes")
+        close.clicked.connect(self.closed.emit)
+        head.addWidget(close)
         lay.addLayout(head)
         tabs = QHBoxLayout()
         tabs.setContentsMargins(10, 0, 10, 4)
@@ -949,6 +959,18 @@ class ShapeDataPane(QWidget):
         self.hint.setObjectName("Hint")
         self.hint.setWordWrap(True)
         lay.addWidget(self.hint)
+        self.link_status = QLabel()
+        self.link_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.link_status.setObjectName("Hint")
+        self.link_status.setWordWrap(True)
+        self.link_status.hide()
+        lay.addWidget(self.link_status)
+        self.graphic_status = QLabel()
+        self.graphic_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.graphic_status.setObjectName("Hint")
+        self.graphic_status.setWordWrap(True)
+        self.graphic_status.hide()
+        lay.addWidget(self.graphic_status)
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["Propriété", "Valeur"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -975,6 +997,22 @@ class ShapeDataPane(QWidget):
         self.table.setRowCount(0)
         self.table.setEnabled(it is not None)
         self.hint.setVisible(it is None)
+        linked = it.data_links if it is not None else []
+        self.link_status.setVisible(bool(linked))
+        if linked:
+            lines = []
+            for link in linked:
+                source = os.path.basename(link.get("path", "")) or "fichier local"
+                key = link.get("source_key", "")
+                target = "texte de la forme" if link.get("shape_key") == "__text__" else link.get("shape_key", "")
+                lines.append(f"CSV lié : {source} · {key} ↔ {target}")
+            self.link_status.setText("\n".join(lines))
+        graphic = it.data_graphic if it is not None else {}
+        self.graphic_status.setVisible(bool(graphic))
+        if graphic:
+            display = {"label_value": "étiquette et valeur", "value": "valeur seule",
+                       "status": "pastille de statut"}.get(graphic.get("display"), "graphique")
+            self.graphic_status.setText(f"Graphique de données : {graphic.get('field', '')} · {display}")
         if it is not None:
             for k, v in it.data.items():
                 r = self.table.rowCount()
@@ -1153,6 +1191,396 @@ class PanZoomPane(QWidget):
 
     def refresh(self) -> None:
         self.overview._sync()
+
+
+# =========================================================================== Explorateur de dessin
+
+class DrawingExplorerPane(QWidget):
+    """Explorateur filtrable des formes et connecteurs, sur une page ou tout le document."""
+
+    ROLE_IDS = int(Qt.ItemDataRole.UserRole)
+    ROLE_KIND = ROLE_IDS + 1
+    ROLE_PAGE = ROLE_IDS + 2
+    MAX_OBJECT_ROWS = 12_000
+    ALL_LAYERS = "__all_layers__"
+    NO_LAYER = "__no_layer__"
+
+    def __init__(self, window):
+        super().__init__()
+        self.win = window
+        self._doc = None
+        self._doc_slots = []
+        self._scene = None
+        self._rows_by_id: dict[tuple[int, str], QTreeWidgetItem] = {}
+        self._page_rows: dict[int, QTreeWidgetItem] = {}
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(160)
+        self._timer.timeout.connect(self._rebuild)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(8, 2, 8, 8)
+        lay.setSpacing(6)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Rechercher des formes et connecteurs")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self.schedule_refresh)
+        lay.addWidget(self.search)
+
+        scope_row = QHBoxLayout()
+        scope_row.setContentsMargins(2, 0, 2, 0)
+        self.all_pages = QCheckBox("Toutes les pages")
+        self.all_pages.setToolTip("Parcourir et rechercher les objets de toutes les pages du document.")
+        self.all_pages.setChecked(window.settings.value("panes/drawing_all_pages", False, type=bool))
+        self.all_pages.toggled.connect(self._scope_changed)
+        scope_row.addWidget(self.all_pages)
+        scope_row.addStretch(1)
+        lay.addLayout(scope_row)
+
+        layer_row = QHBoxLayout()
+        layer_row.setContentsMargins(2, 0, 2, 0)
+        layer_row.addWidget(QLabel("Calque :"))
+        self.layer_filter = QComboBox()
+        self.layer_filter.addItem("Tous les calques", self.ALL_LAYERS)
+        self.layer_filter.currentIndexChanged.connect(self.schedule_refresh)
+        layer_row.addWidget(self.layer_filter, 1)
+        self.layer_filter_box = QWidget()
+        self.layer_filter_box.setLayout(layer_row)
+        self.layer_filter_box.hide()
+        lay.addWidget(self.layer_filter_box)
+
+        self.summary = QLabel()
+        self.summary.setObjectName("Hint")
+        self.summary.setWordWrap(True)
+        lay.addWidget(self.summary)
+
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["Objet", "Type"])
+        self.tree.setRootIsDecorated(True)
+        self.tree.setAlternatingRowColors(True)
+        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.tree.setUniformRowHeights(True)
+        self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.tree.itemSelectionChanged.connect(self._selection_changed)
+        self.tree.itemDoubleClicked.connect(self._activate)
+        lay.addWidget(self.tree, 1)
+
+    def _scope_changed(self, on: bool) -> None:
+        self.win.settings.setValue("panes/drawing_all_pages", on)
+        self._refresh_layer_options()
+        self.schedule_refresh()
+
+    def refresh(self) -> None:
+        doc = self.win.doc
+        if doc is not self._doc:
+            for signal, slot in self._doc_slots:
+                try:
+                    signal.disconnect(slot)
+                except (TypeError, RuntimeError):
+                    pass
+            self._doc = doc
+            self._doc_slots = []
+            if doc is not None:
+                for signal in (doc.pagesChanged, doc.undo_stack.indexChanged):
+                    slot = self._document_changed
+                    signal.connect(slot)
+                    self._doc_slots.append((signal, slot))
+        scene = self.win.scene()
+        self._scene = scene
+        if self.isVisible():
+            self._refresh_layer_options()
+        self.schedule_refresh()
+
+    def _document_changed(self, *_args) -> None:
+        if self.isVisible():
+            self._refresh_layer_options()
+        self.schedule_refresh()
+
+    def _refresh_layer_options(self) -> None:
+        doc = self.win.doc
+        active = self.win.scene()
+        if doc is None or active is None:
+            self.layer_filter_box.hide()
+            return
+        pages = doc.pages if self.all_pages.isChecked() else [active]
+        names = {layer.get("name", "") for page in pages for layer in page.layers if layer.get("name")}
+        current = self.layer_filter.currentData()
+        options = [("Tous les calques", self.ALL_LAYERS)]
+        options.extend((name, name) for name in sorted(names, key=str.casefold))
+        options.append(("Sans calque", self.NO_LAYER))
+        self.layer_filter.blockSignals(True)
+        try:
+            self.layer_filter.clear()
+            for label, value in options:
+                self.layer_filter.addItem(label, value)
+            indices = [i for i in range(self.layer_filter.count()) if self.layer_filter.itemData(i) == current]
+            self.layer_filter.setCurrentIndex(indices[0] if indices else 0)
+        finally:
+            self.layer_filter.blockSignals(False)
+        self.layer_filter_box.show()
+
+    def schedule_refresh(self, *_args) -> None:
+        if self.isVisible():
+            self._timer.start()
+
+    @staticmethod
+    def _label(item) -> tuple[str, str]:
+        if isinstance(item, ShapeItem):
+            label = next((line.strip() for line in item.text.splitlines() if line.strip()), item.sdef.name)
+            return label, item.sdef.name
+        label = next((line.strip() for line in item.text.splitlines() if line.strip()), "Connecteur")
+        return label, "Connecteur"
+
+    def _rebuild(self) -> None:
+        doc = self.win.doc
+        active = self.win.scene()
+        self._scene = active
+        if doc is None or active is None:
+            self.tree.clear()
+            self._rows_by_id.clear()
+            self._page_rows.clear()
+            self.summary.clear()
+            return
+
+        needle = self.search.text().strip().casefold()
+        active_index = doc.pages.index(active)
+        pages = list(enumerate(doc.pages)) if self.all_pages.isChecked() else [(active_index, active)]
+        if self.all_pages.isChecked():
+            pages.sort(key=lambda entry: (entry[0] != active_index, entry[0]))
+        selected_layer = self.layer_filter.currentData() or self.ALL_LAYERS
+
+        def in_layer(item) -> bool:
+            if selected_layer == self.ALL_LAYERS:
+                return True
+            if selected_layer == self.NO_LAYER:
+                return not item.layer
+            return item.layer == selected_layer
+
+        page_entries = []
+        matching_total = 0
+        for page_index, scene in pages:
+            groups: dict[str, list] = {}
+            entries = []
+            for item in scene.all_items():
+                if isinstance(item, ShapeItem) and item.group:
+                    groups.setdefault(item.group, []).append(item)
+                else:
+                    entries.append((item.zValue(), item, None))
+            for group_id, members in groups.items():
+                entries.append((max(member.zValue() for member in members), None, (group_id, members)))
+
+            page_label = f"Page {page_index + 1} {scene.page_name}".casefold()
+            page_matches = bool(needle) and needle in page_label
+            visible_entries = []
+            for _z, item, group in sorted(entries, key=lambda entry: entry[0], reverse=True):
+                if group is not None:
+                    group_id, members = group
+                    group_matches = needle in f"groupe {group_id}".casefold() if needle else False
+                    visible_members = [member for member in members if in_layer(member)
+                                       and (not needle or page_matches or group_matches
+                                            or self._item_matches(member, needle))]
+                    if visible_members:
+                        visible_members.sort(key=lambda value: value.zValue(), reverse=True)
+                        visible_entries.append((None, (group_id, visible_members)))
+                        matching_total += len(visible_members)
+                elif in_layer(item) and (not needle or page_matches or self._item_matches(item, needle)):
+                    visible_entries.append((item, None))
+                    matching_total += 1
+            if visible_entries or (self.all_pages.isChecked() and (not needle or page_matches)):
+                page_entries.append((page_index, scene, visible_entries))
+
+        self._rows_by_id.clear()
+        self._page_rows.clear()
+        self.tree.blockSignals(True)
+        try:
+            self.tree.clear()
+            shown = 0
+            truncated = False
+            for page_index, scene, entries in page_entries:
+                page_root = None
+                if self.all_pages.isChecked():
+                    page_root = QTreeWidgetItem([scene.page_name, f"Page {page_index + 1}"])
+                    page_root.setIcon(0, icons.icon("page_size"))
+                    page_root.setData(0, self.ROLE_KIND, "page")
+                    page_root.setData(0, self.ROLE_PAGE, page_index)
+                    page_object_count = sum(len(group[1]) if group else 1 for _item, group in entries)
+                    page_root.setToolTip(0, security.tooltip_html(f"{scene.page_name}\nPage {page_index + 1} · "
+                                                                  f"{page_object_count} objet(s)"))
+                    self.tree.addTopLevelItem(page_root)
+                    self._page_rows[page_index] = page_root
+                    page_root.setExpanded(True)
+
+                parent_item = page_root
+                for item, group in entries:
+                    remaining = self.MAX_OBJECT_ROWS - shown
+                    if remaining <= 0:
+                        truncated = True
+                        break
+                    if group is not None:
+                        group_id, members = group
+                        members = members[:remaining]
+                        if len(members) < len(group[1]):
+                            truncated = True
+                        parent = QTreeWidgetItem([f"Groupe ({len(members)})", "Groupe"])
+                        parent.setData(0, self.ROLE_IDS, [member.id for member in members])
+                        parent.setData(0, self.ROLE_KIND, "group")
+                        parent.setData(0, self.ROLE_PAGE, page_index)
+                        parent.setIcon(0, icons.icon("group"))
+                        if parent_item is None:
+                            self.tree.addTopLevelItem(parent)
+                        else:
+                            parent_item.addChild(parent)
+                        parent.setExpanded(True)
+                        for member in members:
+                            child = self._add_item(parent, member, page_index)
+                            self._rows_by_id[(page_index, member.id)] = child
+                        shown += len(members)
+                    else:
+                        row = self._add_item(parent_item, item, page_index)
+                        self._rows_by_id[(page_index, item.id)] = row
+                        shown += 1
+                if truncated:
+                    break
+
+            selected = {item.id for item in active.selected_all()}
+            for item_id in selected:
+                row = self._rows_by_id.get((active_index, item_id))
+                if row is not None:
+                    row.setSelected(True)
+            if self.all_pages.isChecked() and not selected:
+                row = self._page_rows.get(active_index)
+                if row is not None:
+                    row.setSelected(True)
+        finally:
+            self.tree.blockSignals(False)
+
+        if truncated:
+            shown_text = f"{shown:,}".replace(",", " ")
+            total_text = f"{matching_total:,}".replace(",", " ")
+            self.summary.setText(f"{shown_text} objets affichés sur {total_text}. Affinez la recherche pour réduire la liste.")
+        elif self.all_pages.isChecked():
+            total_text = f"{matching_total:,}".replace(",", " ")
+            layer_label = self.layer_filter.currentText()
+            suffix = f" · {layer_label}" if selected_layer != self.ALL_LAYERS else ""
+            self.summary.setText(f"{total_text} objet(s) · {len(page_entries)} page(s){suffix}")
+        else:
+            total_text = f"{matching_total:,}".replace(",", " ")
+            layer_label = self.layer_filter.currentText()
+            suffix = f" · {layer_label}" if selected_layer != self.ALL_LAYERS else ""
+            self.summary.setText(f"{total_text} objet(s) · {active.page_name}{suffix}")
+
+    @staticmethod
+    def _item_matches(item, needle: str) -> bool:
+        label, kind = DrawingExplorerPane._label(item)
+        if any(needle in value.casefold() for value in (label, kind, item.id)):
+            return True
+        if isinstance(item, ShapeItem):
+            for key, value in item.data.items():
+                if needle in key.casefold() or needle in value.casefold():
+                    return True
+        return False
+
+    def _add_item(self, parent, item, page_index: int) -> QTreeWidgetItem:
+        label, kind = self._label(item)
+        row = QTreeWidgetItem([label, kind])
+        row.setData(0, self.ROLE_IDS, [item.id])
+        row.setData(0, self.ROLE_KIND, "object")
+        row.setData(0, self.ROLE_PAGE, page_index)
+        row.setToolTip(0, security.tooltip_html(f"{label}\n{kind}\nID : {item.id}"))
+        row.setToolTip(1, security.tooltip_html(f"ID : {item.id}"))
+        if isinstance(item, ShapeItem):
+            row.setIcon(0, QIcon(icons.stencil_pixmap(item.sdef, 24)))
+            if item.locked:
+                row.setText(0, f"{label} — verrouillée")
+        else:
+            row.setIcon(0, icons.icon("connector"))
+        if parent is None:
+            self.tree.addTopLevelItem(row)
+        else:
+            parent.addChild(row)
+        return row
+
+    def _selection_changed(self) -> None:
+        doc = self.win.doc
+        if doc is None or not doc.pages:
+            return
+        selected_rows = self.tree.selectedItems()
+        if not selected_rows:
+            scene = self.win.scene()
+            if scene is not None:
+                scene.select_items([])
+            return
+        current = self.tree.currentItem()
+        target_index = current.data(0, self.ROLE_PAGE) if current is not None else None
+        if target_index is None and selected_rows:
+            target_index = selected_rows[-1].data(0, self.ROLE_PAGE)
+        if target_index is None or not 0 <= target_index < len(doc.pages):
+            return
+        target_index = int(target_index)
+        target_rows = [row for row in selected_rows if row.data(0, self.ROLE_PAGE) == target_index]
+        self.tree.blockSignals(True)
+        try:
+            for row in selected_rows:
+                if row.data(0, self.ROLE_PAGE) != target_index:
+                    row.setSelected(False)
+        finally:
+            self.tree.blockSignals(False)
+        scene = doc.pages[target_index]
+        if scene is not self.win.scene():
+            self.win.show_page(scene)
+        if current is not None and current.data(0, self.ROLE_KIND) == "page":
+            scene.select_items([])
+            return
+        ids = []
+        for row in target_rows:
+            if row.data(0, self.ROLE_KIND) == "page":
+                continue
+            ids.extend(row.data(0, self.ROLE_IDS) or [])
+        items = list({item_id: scene.item_by_id(item_id) for item_id in ids
+                      if scene.item_by_id(item_id) is not None}.values())
+        scene.select_items(items)
+        if items:
+            self.win.view.centerOn(items[0])
+
+    def sync_selection(self) -> None:
+        scene = self.win.scene()
+        doc = self.win.doc
+        if scene is None or doc is None:
+            return
+        page_index = doc.pages.index(scene)
+        selected = {item.id for item in scene.selected_all()}
+        self.tree.blockSignals(True)
+        try:
+            self.tree.clearSelection()
+            for item_id in selected:
+                row = self._rows_by_id.get((page_index, item_id))
+                if row is not None and not row.isHidden():
+                    row.setSelected(True)
+            if not selected and self.all_pages.isChecked():
+                row = self._page_rows.get(page_index)
+                if row is not None:
+                    row.setSelected(True)
+        finally:
+            self.tree.blockSignals(False)
+
+    def _activate(self, row, _column: int) -> None:
+        doc = self.win.doc
+        if doc is None:
+            return
+        page_index = row.data(0, self.ROLE_PAGE)
+        if page_index is None or not 0 <= page_index < len(doc.pages):
+            return
+        scene = doc.pages[int(page_index)]
+        if scene is not self.win.scene():
+            self.win.show_page(scene)
+        if row.data(0, self.ROLE_KIND) == "page":
+            return
+        ids = row.data(0, self.ROLE_IDS) or []
+        if len(ids) == 1:
+            item = scene.item_by_id(ids[0])
+            if isinstance(item, ShapeItem):
+                item.start_edit(select_all=True)
 
 
 class TaskPaneArea(QSplitter):

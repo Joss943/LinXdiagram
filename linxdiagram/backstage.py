@@ -6,13 +6,14 @@ from __future__ import annotations
 import datetime
 import os
 import time
+import unicodedata
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtPrintSupport import QPrinter, QPrinterInfo, QPrintPreviewWidget
 from PyQt6.QtWidgets import (QButtonGroup, QComboBox, QFormLayout, QFrame, QGridLayout, QHBoxLayout,
                              QHeaderView, QLabel, QLineEdit, QPushButton, QScrollArea, QSpinBox,
-                             QStackedWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
-                             QWidget)
+                             QListWidget, QListWidgetItem, QStackedWidget, QToolButton, QTreeWidget,
+                             QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from . import APP_NAME, __version__, icons, security, templates
 from .style import T
@@ -28,22 +29,29 @@ class TemplateTile(QToolButton):
         super().__init__()
         self.setObjectName("TemplateTile")
         self.key = key
-        self.setFixedSize(196, 186)
+        category, description, _keywords = templates.template_info(key)
+        self.setFixedSize(208, 214)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(10, 10, 10, 6)
-        lay.setSpacing(6)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(3)
         pic = QLabel()
-        pic.setPixmap(templates.thumbnail(key))
+        pic.setPixmap(templates.thumbnail(key, 180, 126))
         pic.setAlignment(Qt.AlignmentFlag.AlignCenter)
         name = QLabel(title)
+        name.setObjectName("TemplateTileTitle")
         name.setWordWrap(True)
-        name.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-        for w in (pic, name):
+        name.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        category_label = QLabel(f"{category} · Page vierge")
+        category_label.setObjectName("TemplateTileCategory")
+        for w in (pic, name, category_label):
             w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-            lay.addWidget(w)
-        lay.addStretch(1)
-        self.setToolTip(title)
+        lay.addWidget(pic, 1)
+        lay.addWidget(name)
+        lay.addWidget(category_label)
+        self.setToolTip(f"{title}\n{description}")
+        self.setAccessibleName(title)
+        self.setAccessibleDescription(description)
 
 
 def _page(title: str) -> tuple[QScrollArea, QVBoxLayout]:
@@ -149,6 +157,8 @@ class Backstage(QWidget):
             self.commandRequested.emit(key)
 
     def select(self, key: str) -> None:
+        if key == "new" and not self._templates_ready:
+            self._refresh_templates()
         if key == "print":
             if not self._print_built:
                 self._print_built = True
@@ -164,7 +174,7 @@ class Backstage(QWidget):
         self.nav_buttons[key].setChecked(True)
 
     # ------------------------------------------------------------------ Accueil / Nouveau
-    def _tiles(self, keys, cols: int = 5) -> QGridLayout:
+    def _tiles(self, keys, cols: int = 4) -> QGridLayout:
         grid = QGridLayout()
         grid.setSpacing(8)
         for i, (key, title) in enumerate(keys):
@@ -181,13 +191,15 @@ class Backstage(QWidget):
         row = QHBoxLayout()
         row.addWidget(_section("Nouveau"))
         row.addStretch(1)
-        more = QPushButton("Plus de modèles  →")
+        more = QPushButton("Plus de diagrammes  →")
         more.setFlat(True)
         more.setStyleSheet(f"color: {T['accent_line']}; border: none; background: transparent;")
         more.clicked.connect(lambda: self.select("new"))
         row.addWidget(more)
         lay.addLayout(row)
-        lay.addLayout(self._tiles(templates.TEMPLATES[:5]))
+        featured = dict(templates.TEMPLATES)
+        keys = ("blank", "flow", "network", "org")
+        lay.addLayout(self._tiles([(key, featured[key]) for key in keys], cols=4))
         lay.addSpacing(10)
         lay.addWidget(_section("Récent"))
         self.recent_home = self._recent_tree()
@@ -195,15 +207,105 @@ class Backstage(QWidget):
         return area
 
     def _new(self) -> QWidget:
-        area, lay = _page("Nouveau")
-        search = QLineEdit()
-        search.setPlaceholderText("Rechercher des modèles en ligne : désactivé (aucun accès réseau)")
-        search.setEnabled(False)
-        search.setFixedWidth(520)
-        lay.addWidget(search)
-        lay.addLayout(self._tiles(templates.TEMPLATES, cols=4))
-        lay.addStretch(1)
+        area = QWidget()
+        area.setObjectName("BackstagePage")
+        lay = QVBoxLayout(area)
+        lay.setContentsMargins(36, 26, 36, 22)
+        lay.setSpacing(10)
+        title = QLabel("Nouveau diagramme")
+        title.setObjectName("BackstageTitle")
+        lay.addWidget(title)
+        intro = QLabel("Choisissez un type : une page vierge s’ouvrira avec les gabarits de formes correspondants.")
+        intro.setObjectName("TemplateIntro")
+        intro.setWordWrap(True)
+        lay.addWidget(intro)
+
+        header = QHBoxLayout()
+        self.template_search = QLineEdit()
+        self.template_search.setObjectName("TemplateSearch")
+        self.template_search.setPlaceholderText("Rechercher un type de diagramme…")
+        self.template_search.setClearButtonEnabled(True)
+        self.template_search.addAction(icons.icon("search"), QLineEdit.ActionPosition.LeadingPosition)
+        self.template_count = QLabel()
+        self.template_count.setObjectName("TemplateCount")
+        header.addWidget(self.template_search, 1)
+        header.addWidget(self.template_count)
+        lay.addLayout(header)
+
+        content = QHBoxLayout()
+        content.setSpacing(18)
+        self.template_categories = QListWidget()
+        self.template_categories.setObjectName("TemplateCategories")
+        self.template_categories.setFixedWidth(206)
+        category_counts = {category: sum(templates.template_info(key)[0] == category
+                                         for key, _title in templates.TEMPLATES)
+                           for category in templates.TEMPLATE_CATEGORIES[1:]}
+        for category in templates.TEMPLATE_CATEGORIES:
+            count = len(templates.TEMPLATES) if category == templates.TEMPLATE_CATEGORIES[0] else \
+                category_counts.get(category, 0)
+            item = QListWidgetItem(f"{category}  ·  {count}")
+            item.setData(Qt.ItemDataRole.UserRole, category)
+            self.template_categories.addItem(item)
+
+        self.template_gallery = QWidget()
+        self.template_grid = QGridLayout(self.template_gallery)
+        self.template_grid.setContentsMargins(2, 2, 8, 8)
+        self.template_grid.setHorizontalSpacing(10)
+        self.template_grid.setVerticalSpacing(10)
+        self.template_results = QScrollArea()
+        self.template_results.setObjectName("TemplateResults")
+        self.template_results.setWidgetResizable(True)
+        self.template_results.setFrameShape(QFrame.Shape.NoFrame)
+        self.template_results.setWidget(self.template_gallery)
+
+        content.addWidget(self.template_categories)
+        content.addWidget(self.template_results, 1)
+        lay.addLayout(content, 1)
+
+        self.template_categories.setCurrentRow(0)
+        self._templates_ready = False
+        self.template_categories.currentItemChanged.connect(lambda *_: self._refresh_templates())
+        self.template_search.textChanged.connect(lambda *_: self._refresh_templates())
         return area
+
+    def _refresh_templates(self) -> None:
+        if not hasattr(self, "template_grid"):
+            return
+        self._templates_ready = True
+        selected = self.template_categories.currentItem()
+        category = selected.data(Qt.ItemDataRole.UserRole) if selected else templates.TEMPLATE_CATEGORIES[0]
+        fold = lambda text: "".join(
+            char for char in unicodedata.normalize("NFKD", text.casefold())
+            if not unicodedata.combining(char))
+        query = fold(self.template_search.text()).strip()
+        filtered = []
+        for key, title in templates.TEMPLATES:
+            item_category, description, keywords = templates.template_info(key)
+            if category != templates.TEMPLATE_CATEGORIES[0] and item_category != category:
+                continue
+            haystack = fold(f"{title} {item_category} {description} {keywords}")
+            if query and not all(term in haystack for term in query.split()):
+                continue
+            filtered.append((key, title))
+
+        while self.template_grid.count():
+            item = self.template_grid.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.hide()
+                widget.deleteLater()
+        columns = 4
+        for index, (key, title) in enumerate(filtered):
+            tile = TemplateTile(key, title)
+            tile.clicked.connect(lambda _=False, template=key: self.newRequested.emit(template))
+            self.template_grid.addWidget(tile, index // columns, index % columns)
+        self.template_grid.setColumnStretch(columns, 1)
+        suffix = "type de diagramme" if len(filtered) == 1 else "types de diagramme"
+        self.template_count.setText(f"{len(filtered)} {suffix}")
+        if not filtered:
+            empty = QLabel("Aucun modèle ne correspond à cette recherche.")
+            empty.setObjectName("Hint")
+            self.template_grid.addWidget(empty, 0, 0)
 
     # ------------------------------------------------------------------ Ouvrir
     def _open(self) -> QWidget:
@@ -253,7 +355,7 @@ class Backstage(QWidget):
                 it = QTreeWidgetItem([f"{os.path.basename(p)}\n{os.path.dirname(p)}", when])
                 it.setIcon(0, icons.icon("visio" if p.lower().endswith(".vsdx") else "page_setup"))
                 it.setData(0, Qt.ItemDataRole.UserRole, p if exists else None)
-                it.setToolTip(0, p)
+                it.setToolTip(0, security.tooltip_html(p))
                 if not exists:
                     it.setDisabled(True)
                 tree.addTopLevelItem(it)
@@ -266,6 +368,7 @@ class Backstage(QWidget):
     def _info(self) -> QWidget:
         area, lay = _page("Informations")
         self.info_name = QLabel()
+        self.info_name.setTextFormat(Qt.TextFormat.PlainText)
         self.info_name.setStyleSheet("font-size: 16px;")
         lay.addWidget(self.info_name)
         cols = QHBoxLayout()
@@ -291,6 +394,7 @@ class Backstage(QWidget):
                            ("encrypted", "Chiffrement"), ("title", "Titre"), ("author", "Auteur"),
                            ("subject", "Objet")):
             v = QLabel("—")
+            v.setTextFormat(Qt.TextFormat.PlainText)
             v.setStyleSheet(f"color: {T['text2']};")
             self.props_form.addRow(label, v)
             self.props_labels[key] = v

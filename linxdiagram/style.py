@@ -15,24 +15,24 @@ from . import security
 
 FONT_UI = "Inter"
 
-# Microsoft 365 (refonte visuelle 2023) : barre de titre aux couleurs de Visio, onglets sur
-# fond clair soulignés de bleu, ruban dans une carte blanche arrondie, contrôles arrondis.
+# Microsoft 365 / Office 2024 : accents plus vifs, surfaces claires et hiérarchie nette
+# entre barre de titre, onglets, ruban et espace de dessin.
 LIGHT = {
-    "accent": "#3955a3", "accent_hover": "#4a65b0", "accent_pressed": "#2c4588",
-    "accent_text": "#ffffff", "accent_soft": "#e3e9f7", "accent_line": "#3955a3",
-    "titlebar": "#3955a3", "tabbar": "#f0f0f0", "tab_text": "#ffffff", "tab_ink": "#242424",
+    "accent": "#005a9e", "accent_hover": "#004578", "accent_pressed": "#00345b",
+    "accent_text": "#ffffff", "accent_soft": "#e5eff8", "accent_line": "#005a9e",
+    "titlebar": "#0b3d70", "tabbar": "#f7f9fc", "tab_text": "#ffffff", "tab_ink": "#242424",
     "ribbon": "#ffffff", "ribbon_border": "#e0e0e0", "separator": "#e0e0e0",
-    "window": "#f0f0f0", "surface": "#ffffff", "surface2": "#fafafa",
+    "window": "#f4f6f8", "surface": "#ffffff", "surface2": "#f7f9fb",
     "text": "#242424", "text2": "#616161", "text3": "#a8a8a8",
-    "hover": "#f0f0f0", "pressed": "#e0e0e0", "checked": "#e3e9f7",
-    "input_border": "#d1d1d1", "input_bottom": "#616161", "border": "#e0e0e0", "canvas": "#e6e6e6",
-    "selection": "#dbe4f7", "tooltip": "#ffffff", "close_hover": "#c42b1c",
+    "hover": "#f1f4f7", "pressed": "#e5ebf2", "checked": "#deecf9",
+    "input_border": "#c8d0d9", "input_bottom": "#616161", "border": "#dfe4ea", "canvas": "#e7e9ec",
+    "selection": "#d8ebfa", "tooltip": "#ffffff", "close_hover": "#c42b1c",
 }
 
 DARK = {
-    "accent": "#7c95dc", "accent_hover": "#3d3d3d", "accent_pressed": "#4a4a4a",
-    "accent_text": "#ffffff", "accent_soft": "#2f3a57", "accent_line": "#8fa6e8",
-    "titlebar": "#1f1f1f", "tabbar": "#1f1f1f", "tab_text": "#f5f5f5", "tab_ink": "#f5f5f5",
+    "accent": "#356e9f", "accent_hover": "#407fb3", "accent_pressed": "#275982",
+    "accent_text": "#ffffff", "accent_soft": "#22384f", "accent_line": "#76b8ed",
+    "titlebar": "#17334e", "tabbar": "#1f1f1f", "tab_text": "#f5f5f5", "tab_ink": "#f5f5f5",
     "ribbon": "#2b2b2b", "ribbon_border": "#3d3d3d", "separator": "#474747",
     "window": "#1f1f1f", "surface": "#292929", "surface2": "#2e2e2e",
     "text": "#f5f5f5", "text2": "#c7c7c7", "text3": "#8a8a8a",
@@ -106,6 +106,8 @@ def apply(app: QApplication, dark: bool) -> None:
     app.setPalette(pal)
     a = _write_assets(T)
     t = T
+    file_tab_ink = "#ffffff"
+    file_tab_hover = t["accent_hover"]
     app.setStyleSheet(f"""
     /* Taille fixe comme dans Visio (9 pt) : sans cette règle, Qt reprend la taille du bureau
        (11 pt sous GNOME) pour tout widget stylé, et libellés et boutons débordent. */
@@ -114,36 +116,37 @@ def apply(app: QApplication, dark: bool) -> None:
                padding: 6px 8px; }}
 
     /* ---------- barre de titre et onglets ---------- */
-    #TitleBar {{ background: {t['titlebar']}; }}
-    #TitleBar QLabel#Title {{ color: {t['tab_text']}; font-size: 12px; }}
-    #TitleBar QToolButton {{ background: transparent; border: none; border-radius: 0; padding: 4px; }}
-    #TitleBar QToolButton:hover {{ background: {t['accent_hover']}; }}
-    #TitleBar QToolButton:pressed {{ background: {t['accent_pressed']}; }}
+    #TitleBar {{ background: {t['titlebar']}; border-bottom: 1px solid rgba(0,0,0,0.12); }}
+    #TitleBar QLabel#Title {{ color: {t['tab_text']}; font-size: 12px; font-weight: 600; }}
+    #TitleBar QToolButton {{ background: transparent; border: none; border-radius: 4px; padding: 4px; }}
+    #TitleBar QToolButton:hover {{ background: rgba(255,255,255,0.14); }}
+    #TitleBar QToolButton:pressed {{ background: rgba(0,0,0,0.16); }}
     #TitleBar QToolButton#WinClose:hover {{ background: {t['close_hover']}; }}
     #TitleBar QToolButton::menu-button {{ border: none; background: transparent; width: 12px; }}
-    #TitleBar QToolButton::menu-button:hover {{ background: {t['accent_hover']}; }}
+    #TitleBar QToolButton::menu-button:hover {{ background: rgba(255,255,255,0.14); }}
     #TitleBar QToolButton::menu-arrow {{ image: url({a['down_light']}); width: 8px; height: 8px; }}
     #TitleBar QLineEdit#CommandSearch {{ background: rgba(255,255,255,0.18); border: 1px solid transparent;
-        border-radius: 4px; color: {t['tab_text']}; padding: 3px 8px; min-height: 18px; }}
+        border-radius: 7px; color: {t['tab_text']}; padding: 3px 10px; min-height: 20px; }}
     #TitleBar QLineEdit#CommandSearch:focus {{ background: {t['surface']}; color: {t['text']};
         border: 1px solid {t['accent']}; }}
-    #RibbonTabBar {{ background: {t['tabbar']}; }}
+    #RibbonTabBar {{ background: {t['tabbar']}; border-bottom: 1px solid {t['border']}; }}
     QPushButton#RibbonTab {{ color: {t['tab_ink']}; background: transparent; border: none;
-        border-bottom: 3px solid transparent; border-radius: 0; padding: 6px 10px 3px 10px; font-size: 12px;
-        margin: 2px 1px 0 1px; }}
+        border-bottom: 3px solid transparent; border-radius: 0; padding: 7px 11px 4px 11px; font-size: 12px;
+        margin: 0 1px; }}
     QPushButton#RibbonTab:hover {{ background: {t['pressed'] if not dark else t['hover']};
-        border-top-left-radius: 4px; border-top-right-radius: 4px; }}
-    QPushButton#RibbonTab:checked {{ color: {t['accent_line']}; border-bottom: 3px solid {t['accent_line']}; }}
-    QPushButton#FileTab {{ color: {t['tab_ink']}; background: transparent; border: none; border-radius: 4px;
-        padding: 6px 12px 6px 12px; font-size: 12px; margin: 2px 1px 0 6px; }}
-    QPushButton#FileTab:hover {{ background: {t['pressed'] if not dark else t['hover']}; }}
+        border-top-left-radius: 5px; border-top-right-radius: 5px; }}
+    QPushButton#RibbonTab:checked {{ color: {t['accent_line']}; background: {t['surface']};
+        border-bottom: 3px solid {t['accent_line']}; font-weight: 600; }}
+    QPushButton#FileTab {{ color: {file_tab_ink}; background: {t['accent']}; border: none; border-radius: 3px;
+        padding: 6px 12px; font-size: 12px; font-weight: 600; margin: 2px 1px 0 6px; }}
+    QPushButton#FileTab:hover {{ background: {file_tab_hover}; }}
     #TabBarTools QToolButton {{ background: transparent; border: none; border-radius: 4px; color: {t['tab_ink']};
         padding: 3px 6px; }}
     #TabBarTools QToolButton:hover {{ background: {t['pressed'] if not dark else t['hover']}; }}
 
     /* ---------- ruban : carte blanche arrondie ---------- */
     #RibbonBody {{ background: {t['window']}; }}
-    #RibbonCard {{ background: {t['ribbon']}; border: 1px solid {t['ribbon_border']}; border-radius: 8px; }}
+    #RibbonCard {{ background: {t['ribbon']}; border: 1px solid {t['ribbon_border']}; border-radius: 6px; }}
     QMenu#RibbonGroupPopup {{ background: {t['ribbon']}; border-radius: 6px; padding: 4px; }}
     QLabel#RibbonGroupLabel {{ color: {t['text2']}; font-size: 11px; }}
     QFrame#RibbonSep {{ background: {t['separator']}; max-width: 1px; min-width: 1px; }}
@@ -242,15 +245,17 @@ def apply(app: QApplication, dark: bool) -> None:
     QSplitter::handle:vertical {{ height: 1px; }}
 
     /* ---------- pages et barre d'état ---------- */
-    #PageBar {{ background: {t['window']}; border-top: 1px solid {t['border']}; }}
+    #PageBar {{ background: {t['surface2']}; border-top: 1px solid {t['border']}; }}
     #PageBar QToolButton {{ border: none; background: transparent; padding: 3px; }}
     #PageBar QToolButton:hover {{ background: {t['hover']}; }}
     QTabBar#PageTabs::tab {{ background: transparent; color: {t['text']}; border: none;
-        border-right: 1px solid {t['border']}; padding: 4px 14px; min-width: 40px; }}
+        border-right: 1px solid {t['border']}; border-top-left-radius: 4px; border-top-right-radius: 4px;
+        padding: 5px 14px; min-width: 40px; }}
     QTabBar#PageTabs::tab:hover {{ background: {t['hover']}; }}
     QTabBar#PageTabs::tab:selected {{ background: {t['surface']}; color: {t['accent_line']};
         font-weight: 600; border-bottom: 2px solid {t['accent_line']}; }}
-    QStatusBar {{ background: {t['window']}; color: {t['text2']}; border-top: 1px solid {t['border']}; }}
+    QStatusBar {{ background: {t['surface2']}; color: {t['text2']}; border-top: 1px solid {t['border']};
+        min-height: 26px; }}
     QStatusBar QLabel {{ color: {t['text2']}; padding: 0 8px; }}
     QStatusBar QToolButton {{ border: none; background: transparent; padding: 2px; }}
     QStatusBar QToolButton:hover {{ background: {t['hover']}; }}
@@ -268,8 +273,21 @@ def apply(app: QApplication, dark: bool) -> None:
     #BackstagePage {{ background: {t['surface']}; }}
     QLabel#BackstageTitle {{ font-size: 28px; font-weight: 300; color: {t['text']}; }}
     QLabel#BackstageSection {{ font-size: 15px; color: {t['text']}; }}
-    QToolButton#TemplateTile {{ border: 1px solid transparent; background: transparent; border-radius: 2px; }}
-    QToolButton#TemplateTile:hover {{ background: {t['hover']}; border-color: {t['border']}; }}
+    QLineEdit#TemplateSearch {{ min-height: 32px; padding-left: 10px; border-radius: 6px; }}
+    QLabel#TemplateCount {{ color: {t['text2']}; padding: 0 8px; }}
+    QLabel#TemplateIntro {{ color: {t['text2']}; font-size: 13px; padding-bottom: 3px; }}
+    QListWidget#TemplateCategories {{ background: {t['surface2']}; color: {t['text']}; border: 1px solid {t['border']};
+        border-radius: 7px; outline: 0; padding: 4px; }}
+    QListWidget#TemplateCategories::item {{ padding: 9px 10px; border-radius: 5px; }}
+    QListWidget#TemplateCategories::item:hover {{ background: {t['hover']}; }}
+    QListWidget#TemplateCategories::item:selected {{ color: {t['accent_line']}; background: {t['selection']};
+        font-weight: 600; }}
+    QScrollArea#TemplateResults {{ background: transparent; }}
+    QToolButton#TemplateTile {{ border: 1px solid {t['border']}; background: {t['surface']}; border-radius: 7px;
+        text-align: left; }}
+    QToolButton#TemplateTile:hover {{ background: {t['hover']}; border-color: {t['accent_line']}; }}
+    QLabel#TemplateTileTitle {{ color: {t['text']}; font-size: 12px; font-weight: 600; }}
+    QLabel#TemplateTileCategory {{ color: {t['text2']}; font-size: 10px; }}
     QTreeWidget#RecentList {{ border: none; background: {t['surface']}; }}
     QTreeWidget#RecentList::item {{ padding: 6px 2px; }}
     QTreeWidget#RecentList::item:hover {{ background: {t['hover']}; }}

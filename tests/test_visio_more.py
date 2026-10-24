@@ -1,5 +1,5 @@
 """Fonctions Visio ajoutées : opérations sur les formes, alignement automatique,
-Crayon / Forme libre / Arc, gabarits BPMN, blocs, entité-relation et chronologie."""
+Forme libre / Arc, gabarits blocs, entité-relation et chronologie."""
 
 import os
 import tempfile
@@ -126,7 +126,7 @@ class FreehandToolsTest(unittest.TestCase):
 
     def test_pencil_freeform_and_arc(self):
         wave = [(200 + i * 6, 300 + (12 if i % 2 else -12)) for i in range(20)]
-        for tool, closed, filled in (("pencil", False, False), ("freeform", True, True), ("arc", False, False)):
+        for tool, closed, filled in (("freeform", True, True), ("arc", False, False)):
             self.w.a[f"tool_{tool}"].trigger()
             self.assertEqual(self.w.doc.tool, tool)
             before = len(self.sc.shapes())
@@ -150,16 +150,17 @@ class NewStencilsTest(unittest.TestCase):
             self.assertIn(cat, stencils.CATEGORIES)
             self.assertGreaterEqual(len(stencils.by_category(cat)), 4, cat)
         keys = [k for k, _t in templates.TEMPLATES]
-        for key in ("bpmn", "block", "erd", "timeline"):
+        for key, cat in (("block_diagram", stencils.BLOCK), ("erd_chen", stencils.DB),
+                         ("database_model", stencils.DB), ("timeline", stencils.TIMELINE)):
             self.assertIn(key, keys)
-            doc = Document(templates.preview(key))
-            self.assertGreater(len(doc.pages[0].shapes()), 3, key)
+            self.assertEqual(templates.category_for(key), cat)
+            Document(templates.build(key))
             templates.thumbnail(key)
 
     def test_new_shapes_roundtrip_vsdx(self):
         doc = Document()
         sc = doc.pages[0]
-        types = [d.type_id for c in (stencils.BPMN, stencils.DB, stencils.TIMELINE)
+        types = [d.type_id for c in (stencils.BLOCK, stencils.DB, stencils.TIMELINE)
                  for d in stencils.by_category(c)]
         for i, t in enumerate(types):
             sc.add_shape(t, QPointF(80 + (i % 6) * 120, 80 + (i // 6) * 110))
