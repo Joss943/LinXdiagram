@@ -22,6 +22,7 @@ class DiagramView(QGraphicsView):
     viewChanged = pyqtSignal()
     mouseScenePos = pyqtSignal(QPointF)
     contextMenuRequested = pyqtSignal(QPoint)
+    favoriteDropped = pyqtSignal(int, QPointF)
     imageDropped = pyqtSignal(str, QPointF)
 
     def __init__(self, parent: QWidget | None = None):
@@ -288,8 +289,12 @@ class DiagramView(QGraphicsView):
             return
         if mime.hasFormat(STENCIL_MIME):
             type_id = bytes(mime.data(STENCIL_MIME)).decode("ascii", "ignore")
-            from . import stencils
-            if type_id in stencils.SHAPES:
+            from . import favorites, stencils
+            fav = favorites.Favorites.index_of(type_id)
+            if fav is not None:
+                self.favoriteDropped.emit(fav, pos)
+                self.setFocus()
+            elif type_id in stencils.SHAPES:
                 sc.add_shape(type_id, pos)
                 self.setFocus()
             event.acceptProposedAction()

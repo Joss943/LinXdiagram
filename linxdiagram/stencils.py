@@ -1105,8 +1105,33 @@ _DEFS += [
              default_text="Titre du diagramme", cff="frame_v"),
 ]
 
+def _b_container_band():
+    return _rect(0, 0, 1, 1), _rect(0, 0, 1, 0.14)
+
+
+def _b_container_round():
+    return _rrect(0, 0, 1, 1, 0.04), _lines([(0, 0.14), (1, 0.14)])
+
+
+# Styles de conteneur (Insertion > Conteneur, onglet « Format du conteneur ») : mêmes
+# règles que le conteneur classique, présentation différente.
+CONTAINER_STYLES = (("basic.container", "Classique"), ("container.band", "Bandeau"),
+                    ("container.rounded", "Arrondi"), ("container.plain", "Simple"))
+_CONTAINER_TEXT = {"bold": True, "valign": "middle", "halign": "left"}
+
 # Formes non présentées dans les gabarits mais nécessaires (images, import VSDX).
 _HIDDEN: list[ShapeDef] = [
+    ShapeDef("container.band", "Conteneur à bandeau", "", _unit(_b_container_band), (90, 60), SIDES_AND_CORNERS,
+             text_rect=(0, 0, 1, 0.14), style={"fill": "#ffffff", "line": "#2f5597", "themed": False},
+             text={**_CONTAINER_TEXT, "color": "#ffffff"}, detail_fill=True, container=True,
+             default_text="Conteneur"),
+    ShapeDef("container.rounded", "Conteneur arrondi", "", _unit(_b_container_round), (90, 60),
+             SIDES_AND_CORNERS, text_rect=(0, 0, 1, 0.14),
+             style={"fill": "#f7f9fc", "line": "#7f9cc9", "themed": False},
+             text={**_CONTAINER_TEXT, "color": "#1f3864"}, container=True, default_text="Conteneur"),
+    ShapeDef("container.plain", "Conteneur simple", "", _b_rect, (90, 60), SIDES_AND_CORNERS,
+             text_rect=(0, 0, 1, 0.14), style={"fill": "", "line": "#7f7f7f", "dash": "dash", "themed": False},
+             text={**_CONTAINER_TEXT, "color": "#404040"}, container=True, default_text="Conteneur"),
     ShapeDef("special.image", "Image", "", _b_rect, (40, 30), SIDES_AND_CORNERS,
              style=dict(_NO_FILL), text_rect=_LABEL_BELOW, label_outside=True),
     ShapeDef("special.custom", "Forme personnalisée", "", _b_rect, (30, 20), SIDES_AND_CORNERS),

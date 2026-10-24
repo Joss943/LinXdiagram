@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import os
 
-from PyQt6.QtCore import QMimeData, QRect, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QMimeData, QPoint, QRect, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QIcon, QPainter
 from PyQt6.QtWidgets import (QSizePolicy, QAbstractItemView, QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox,
                              QFontComboBox, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (QSizePolicy, QAbstractItemView, QButtonGroup, QChec
                              QTableWidget, QTableWidgetItem, QToolButton, QTreeWidget,
                              QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from . import icons, security, stencils
+from . import favorites, icons, security, stencils
 from .canvas import STENCIL_MIME, OverviewView
 from .commands import PageCommand
 from .items import ConnectorItem, ShapeItem
@@ -135,7 +135,8 @@ class ShapeList(QListWidget):
     def set_shapes(self, defs) -> None:
         self.clear()
         for d in defs:
-            it = QListWidgetItem(QIcon(icons.stencil_pixmap(d, 32)), d.name)
+            pm = getattr(d, "pixmap", None) or icons.stencil_pixmap(d, 32)
+            it = QListWidgetItem(QIcon(pm), d.name)
             it.setData(Qt.ItemDataRole.UserRole, d.type_id)
             it.setToolTip(f"<b>{d.name}</b><br>Faites glisser la forme sur la page.")
             self.addItem(it)
@@ -165,6 +166,7 @@ class ShapeList(QListWidget):
 
 
 QUICK = "Formes rapides"
+FAVS = favorites.CATEGORY
 
 
 class ShapesPane(QWidget):
@@ -172,6 +174,7 @@ class ShapesPane(QWidget):
     quickShapeChanged = pyqtSignal(str)
     categoriesChanged = pyqtSignal()
     closed = pyqtSignal()
+    favoriteMenu = pyqtSignal(int, QPoint)
 
     def __init__(self):
         super().__init__()
@@ -180,6 +183,7 @@ class ShapesPane(QWidget):
         self.setMinimumWidth(230)
         self.open_cats: list[str] = [stencils.BASIC, stencils.FLOW, stencils.ARROWS_CAT]
         self.current = stencils.BASIC
+        self.favorites = None  # gabarit « Favoris » partagé par les fenêtres
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -232,6 +236,8 @@ class ShapesPane(QWidget):
         sep.setStyleSheet(f"background: {T['border']};")
         pl.addWidget(sep)
         self.list = ShapeList()
+        self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._list_menu)
         self._wire(self.list)
         pl.addWidget(self.list, 1)
         self.stack.addWidget(page)
@@ -292,12 +298,14 @@ class ShapesPane(QWidget):
             b.setChecked(b.text() == cat)
         if cat == QUICK:
             defs = [d for c in self.open_cats for d in stencils.by_category(c)[:4]]
+        elif cat == FAVS:
+            defs = self.favorites.defs() if self.favorites is not None else []
         else:
             defs = stencils.by_category(cat)
         self.list.set_shapes(defs)
 
     def open_category(self, cat: str, select: bool = True) -> None:
-        if cat in stencils.CATEGORIES and cat not in self.open_cats:
+        if (cat in stencils.CATEGORIES or cat == FAVS) and cat not in self.open_cats:
             self.open_cats.insert(0, cat)
         if select:
             self.current = cat
@@ -306,7 +314,7 @@ class ShapesPane(QWidget):
         self.stack.setCurrentIndex(0)
 
     def set_open(self, cats: list[str], select: str | None = None) -> None:
-        self.open_cats = [c for c in cats if c in stencils.CATEGORIES] or [stencils.BASIC]
+        self.open_cats = [c for c in cats if c in stencils.CATEGORIES or c == FAVS] or [stencils.BASIC]
         self.current = select or self.open_cats[0]
         self._rebuild_rows()
 
@@ -317,6 +325,12 @@ class ShapesPane(QWidget):
             a.setCheckable(True)
             a.setChecked(cat in self.open_cats)
             a.triggered.connect(lambda on, c=cat: self._toggle_cat(c, on))
+        menu.addSeparator()
+        mine = menu.addMenu(icons.icon("shapes_panel"), "Mes formes")
+        fav = mine.addAction(FAVS)
+        fav.setCheckable(True)
+        fav.setChecked(FAVS in self.open_cats)
+        fav.triggered.connect(lambda on: self._toggle_cat(FAVS, on))
         menu.addSeparator()
         menu.addAction(icons.icon("search"), "Rechercher des formes…", self.focus_search)
         menu.exec(self.more.mapToGlobal(self.more.rect().topRight()))
@@ -337,6 +351,16 @@ class ShapesPane(QWidget):
             self.search_hint.setText("Tapez un mot-clé : processus, serveur, flèche…")
         else:
             self.search_hint.setText(f"{len(found)} résultat(s)" if found else "Aucune forme trouvée.")
+
+    def refresh_favorites(self) -> None:
+        if self.current == FAVS:
+            self.show_category(FAVS)
+
+    def _list_menu(self, pos) -> None:
+        it = self.list.itemAt(pos)
+        idx = favorites.Favorites.index_of(it.data(Qt.ItemDataRole.UserRole)) if it else None
+        if idx is not None:
+            self.favoriteMenu.emit(idx, self.list.viewport().mapToGlobal(pos))
 
     def focus_search(self) -> None:
         self.tab_group.button(1).setChecked(True)

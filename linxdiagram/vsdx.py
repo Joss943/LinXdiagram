@@ -612,6 +612,12 @@ class _Importer:
                     self.layer_names.append(security.clean_line(cells.get("Name") or cells.get("NameUniv") or
                                                                 f"Calque {len(self.layer_names) + 1}", 64))
             page_dict = self._load_page(part, name, pw, ph)
+            if ps is not None:
+                for key, cells in ps.named_rows("User"):
+                    if key == "LinXGuides":
+                        raw = [g.split(":") for g in (cells.get("Value") or "").split(";") if ":" in g]
+                        page_dict["guides"] = fileformat.clean_guides(
+                            [{"o": o, "pos": (_num(v, None) or 0.0) * PX_PER_INCH} for o, v in raw[:200]])
             id_to_name[page.get("ID", "")] = page_dict["name"]
             page_dict["is_background"] = page.get("Background") in ("1", "true")
             if page.get("BackPage"):
@@ -1357,7 +1363,7 @@ def _page_xml(scene, images: list[tuple[str, bytes]], fonts: dict) -> tuple[byte
                     _cell(row, "DirX", 0.0)
                     _cell(row, "DirY", 0.0)
                     _cell(row, "Type", 0)
-            _data_sections(el, st["data"], st["link"], st["type"], bool(sdef.cff),
+            _data_sections(el, st["data"], st["link"], st["type"], bool(sdef.container),
                            st.get("data_graphic"))
             outline, detail = it.export_paths()
             ix = 0
@@ -1580,6 +1586,13 @@ def export_vsdx(document, path: str) -> None:
                 _cell(row, "Active", False)
                 _cell(row, "Snap", True)
                 _cell(row, "Glue", True)
+        if getattr(scene, "ruler_guides", None):
+            # Repères de LinXdiagram (en pouces, origine en haut à gauche) : relus par LinXdiagram.
+            value = ";".join(f"{g['o']}:{g['pos'] / PX_PER_INCH:.4f}" for g in scene.ruler_guides)
+            sec = _el(sheet, "Section", N="User")
+            row = _el(sec, "Row", N="LinXGuides")
+            _cell(row, "Value", value, "STR", _str_formula(value))
+            _cell(row, "Prompt", "")
         rel = ET.SubElement(p, _v("Rel"))
         rel.set(f"{{{RNS}}}id", f"rId{i + 1}")
         page_list_rels.append((f"rId{i + 1}", REL_PAGE, f"page{i + 1}.xml"))

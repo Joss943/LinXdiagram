@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, Q
                              QStackedWidget, QTabBar, QToolButton, QVBoxLayout, QWidget, QWidgetAction)
 
 from . import (APP_NAME, __version__, FILE_EXT, datavis, export, fileformat, icons, quickstyles, security,
-               fields, shapeops, spellcheck, stencils, swimlanes, templates, vsdx)
+               favorites, fields, shapeops, spellcheck, stencils, swimlanes, templates, vsdx)
 from .backstage import Backstage
 from .canvas import CanvasArea
 from .commands import DocSettingsCommand, PageCommand
@@ -45,6 +45,7 @@ VSDX_FILTER = "Dessin Visio (*.vsdx)"
 LINE_WEIGHTS = (0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0)
 FONT_SIZES = (6, 7, 8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48, 72)
 CFF_TAB = "Diagramme de flux interfonctionnel"
+CONTAINER_TAB = "Format du conteneur"
 SYMBOLS = "©®™€£$¥§¶°±×÷≈≠≤≥∞µπΩΣ√∑←→↑↓↔⇒✓✗•…«»"
 BACKGROUNDS = (("#ffffff", "Blanc"), ("#f3f2f1", "Gris clair"), ("#eaf1fb", "Bleu clair"),
                ("#eef7ee", "Vert clair"), ("#fdf5e6", "Sable"), ("#f6effa", "Lavande"),
@@ -316,6 +317,16 @@ class MainWindow(QMainWindow):
         A("page_dup", "Dupliquer la page", "page_dup", None, self.duplicate_page)
         A("page_del", "Supprimer la page", "page_del", None, self.delete_page)
         A("page_rename", "Renommer la page…", "page_rename", None, self.rename_page)
+        A("add_favorite", "Ajouter aux Favoris…", "shapes_panel", None, self.add_to_favorites,
+          tip="Enregistre la sélection dans le gabarit Favoris (Mes formes) pour la réutiliser.")
+        A("container_fit", "Ajuster au contenu", "auto_size", None,
+          lambda: self._with_container(lambda sc, c: sc.container_fit(c)),
+          tip="Redimensionne le conteneur autour des formes qu'il contient.")
+        A("container_select", "Sélectionner le contenu", "select_all", None,
+          lambda: self._with_container(lambda sc, c: sc.container_select_contents(c)))
+        A("container_disband", "Désassembler le conteneur", "ungroup", None,
+          lambda: self._with_container(lambda sc, c: sc.container_disband(c)),
+          tip="Supprime le conteneur en conservant les formes qu'il contient.")
         A("spelling", "Orthographe", "spelling", "F7", self.check_spelling,
           tip="Vérifie l'orthographe de tous les textes du document (dictionnaires Hunspell du système).")
         A("insert_field", "Champ", "field", None, self.insert_field,
@@ -472,6 +483,8 @@ class MainWindow(QMainWindow):
         self.splitter.setChildrenCollapsible(False)
         self.shapes_panel = ShapesPane()
         self.shapes_panel.shapeActivated.connect(self._add_at_center)
+        self.shapes_panel.favorites = self._favorites()
+        self.shapes_panel.favoriteMenu.connect(self._favorite_menu)
         self.shapes_panel.quickShapeChanged.connect(lambda t: setattr(self.doc, "quick_shape", t))
         self.shapes_panel.closed.connect(lambda: self.a["show_shapes"].setChecked(False))
         self.shapes_panel.categoriesChanged.connect(lambda: QTimer.singleShot(0, self._update_cff_tab))
@@ -483,6 +496,7 @@ class MainWindow(QMainWindow):
         self.view = self.canvas.view
         self.view.zoomChanged.connect(self._zoom_changed)
         self.view.contextMenuRequested.connect(self._context_menu)
+        self.view.favoriteDropped.connect(self.insert_favorite)
         self.view.imageDropped.connect(self.insert_image)
         cl.addWidget(self.canvas, 1)
         cl.addWidget(self._build_page_bar())
@@ -892,6 +906,23 @@ class MainWindow(QMainWindow):
                    menu=self._menu(("Ouvrir le gabarit", "shapes_panel",
                                     lambda: self.shapes_panel.open_category(stencils.CFF)))))
         cff.addWidget(g)
+
+        # ======================================================= Conteneur (contextuel)
+        ctab = self.ribbon.add_page(CONTAINER_TAB)
+        g = RibbonGroup("Taille")
+        g.large(a["container_fit"])
+        ctab.addWidget(g)
+        g = RibbonGroup("Styles du conteneur")
+        self.container_gallery = RibbonGallery(
+            [(icons.stencil_pixmap(stencils.get(t), 40), name, t) for t, name in stencils.CONTAINER_STYLES],
+            QSize(46, 46), visible=4, popup_cols=4)
+        self.container_gallery.activated.connect(self._container_style)
+        g.add(self.container_gallery, Qt.AlignmentFlag.AlignVCenter)
+        ctab.addWidget(g)
+        g = RibbonGroup("Appartenance")
+        g.large(a["container_select"])
+        g.large(a["container_disband"])
+        ctab.addWidget(g)
 
         # ======================================================= Affichage
         view = self.ribbon.add_page("Affichage")
@@ -1338,6 +1369,7 @@ class MainWindow(QMainWindow):
         sel = sc.selected_all()
         shapes = sc.selected_shapes()
         has = bool(sel)
+        self.ribbon.set_tab_visible(CONTAINER_TAB, sc.is_plain_container(sc.single_selected))
         for key in ("cut", "copy", "delete", "duplicate", "front", "back", "forward", "backward",
                     "edit_text"):
             self.a[key].setEnabled(has)
@@ -1392,7 +1424,11 @@ class MainWindow(QMainWindow):
         sc = self.scene()
         if sc is None or sc not in self.doc.pages:
             return
-        self.page_label.setText(f"Page {self.doc.pages.index(sc) + 1} sur {len(self.doc.pages)}")
+        fg = [p for p in self.doc.pages if not p.is_background]
+        if sc.is_background:
+            self.page_label.setText(f"Arrière-plan « {sc.page_name} »")
+        else:
+            self.page_label.setText(f"Page {fg.index(sc) + 1} sur {len(fg)}")
         single = sc.single_selected
         if isinstance(single, ShapeItem):
             self.sel_label.setText(f"Largeur : {single.w / PX_PER_MM:.0f} mm    Hauteur : "
@@ -1563,13 +1599,82 @@ class MainWindow(QMainWindow):
 
     def _add_at_center(self, type_id: str) -> None:
         sc = self.scene()
-        if sc is not None:
+        if sc is None:
+            return
+        fav = favorites.Favorites.index_of(type_id)
+        if fav is not None:
+            self.insert_favorite(fav, self._view_center())
+        else:
             sc.add_shape(type_id, self._view_center())
-            self.view.setFocus()
+        self.view.setFocus()
+
+    # ------------------------------------------------------------------ Favoris (Mes formes)
+    def _favorites(self):
+        if getattr(self.ctx, "favorites", None) is None:
+            base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+            folder = security.private_dir(os.path.join(base, APP_NAME))
+            self.ctx.favorites = favorites.Favorites(os.path.join(folder, "favoris.json"))
+        return self.ctx.favorites
+
+    def add_to_favorites(self) -> None:
+        """« Ajouter aux Favoris » : la sélection devient une forme réutilisable (Mes formes)."""
+        sc = self.scene()
+        data = sc.copy_selection() if sc is not None else None
+        if not data:
+            return
+        single = sc.single_selected
+        default = (single.text.strip().splitlines() or [""])[0] if single is not None else ""
+        if not default and isinstance(single, ShapeItem):
+            default = single.sdef.name
+        name, ok = QInputDialog.getText(self, "Ajouter aux Favoris", "Nom de la forme :",
+                                        text=default or "Ma forme")
+        if not ok:
+            return
+        if not self._favorites().add(name, data):
+            self.statusBar().showMessage("Le gabarit Favoris est plein ou la forme est trop volumineuse.", 6000)
+            return
+        for w in self.ctx.windows:
+            w.shapes_panel.favorites = self._favorites()
+            w.shapes_panel.refresh_favorites()
+        self.shapes_panel.open_category(favorites.CATEGORY)
+
+    def insert_favorite(self, index: int, pos) -> None:
+        sc = self.scene()
+        favs = self._favorites()
+        if sc is None or not 0 <= index < len(favs.items):
+            return
+        try:
+            sc.paste(favs.items[index][1], pos - favs.center_of(index), "Insérer une forme favorite")
+        except fileformat.DocumentError as exc:
+            self._plain_message(QMessageBox.Icon.Warning, APP_NAME, str(exc))
+
+    def _favorite_menu(self, index: int, global_pos) -> None:
+        favs = self._favorites()
+        m = QMenu(self)
+        m.addAction("Renommer…", lambda: self._rename_favorite(index))
+        m.addAction(icons.icon("delete"), "Supprimer des Favoris", lambda: self._remove_favorite(index))
+        m.exec(global_pos)
+
+    def _rename_favorite(self, index: int) -> None:
+        favs = self._favorites()
+        name, ok = QInputDialog.getText(self, "Renommer", "Nom de la forme :", text=favs.items[index][0])
+        if ok:
+            favs.rename(index, name)
+            for w in self.ctx.windows:
+                w.shapes_panel.refresh_favorites()
+
+    def _remove_favorite(self, index: int) -> None:
+        self._favorites().remove(index)
+        for w in self.ctx.windows:
+            w.shapes_panel.refresh_favorites()
 
     def _insert(self, type_id: str, style: dict | None = None, text_style: dict | None = None) -> None:
         sc = self.scene()
         if sc is None:
+            return
+        if stencils.get(type_id).container and sc.selected_shapes():
+            sc.wrap_in_container(type_id, style, text_style)  # comme Visio : autour de la sélection
+            self.view.setFocus()
             return
         st = sc.new_shape_state(type_id, self._view_center())
         if style:
@@ -2308,6 +2413,25 @@ class MainWindow(QMainWindow):
                 self.doc.undo_stack.endMacro()
             self.show_page(sc)
 
+    def _with_container(self, fn) -> None:
+        sc = self.scene()
+        c = sc.single_selected if sc is not None else None
+        if sc is not None and sc.is_plain_container(c):
+            fn(sc, c)
+
+    def _container_style(self, type_id: str) -> None:
+        sc = self.scene()
+        c = sc.single_selected if sc is not None else None
+        if not sc or not sc.is_plain_container(c) or c.type_id == type_id:
+            return
+        style, ts = fileformat.default_shape_styles(type_id, self.doc.settings["theme"])
+
+        def fn(_it, st):
+            st["type"] = type_id
+            st["style"] = dict(style)
+            st["text_style"] = {**st["text_style"], **{k: ts[k] for k in ("color", "bold", "halign", "valign")}}
+        sc.modify([c], fn, "Style du conteneur")
+
     def check_spelling(self) -> None:
         """Révision > Orthographe (F7) : page active d'abord, puis les autres pages."""
         if getattr(self.ctx, "speller", None) is None:
@@ -2680,6 +2804,7 @@ class MainWindow(QMainWindow):
             grp = menu.addMenu(icons.icon("group"), "Groupe")
             grp.addAction(a["group"])
             grp.addAction(a["ungroup"])
+            menu.addAction(a["add_favorite"])
             if isinstance(single, ShapeItem):
                 menu.addSeparator()
                 menu.addAction(a["link"])

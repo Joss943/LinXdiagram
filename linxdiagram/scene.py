@@ -741,6 +741,10 @@ class DiagramScene(QGraphicsScene):
         if isinstance(grabbed, ShapeItem) and grabbed.sdef.cff and grabbed._drag is None:
             self._carry = self._cff_carry(grabbed)
             self._carry_anchor = (grabbed.id, QPointF(grabbed.pos()))
+        elif isinstance(grabbed, ShapeItem) and grabbed.sdef.container and grabbed._drag is None:
+            # Comme dans Visio : déplacer un conteneur déplace les formes qu'il contient.
+            self._carry = {s.id: QPointF(s.pos()) for s in self.container_members(grabbed) if not s.isSelected()}
+            self._carry_anchor = (grabbed.id, QPointF(grabbed.pos()))
         self._capture_press()
 
     def _capture_press(self) -> None:
@@ -2009,6 +2013,71 @@ class DiagramScene(QGraphicsScene):
             st["text_style"]["color"] = preset[role + "_text"]
         self.modify(frames + lanes + phases, fn, "Style interfonctionnel")
 
+    # ------------------------------------------------------------------ conteneurs (Visio)
+    @staticmethod
+    def is_plain_container(s) -> bool:
+        return isinstance(s, ShapeItem) and s.sdef.container and not s.sdef.cff
+
+    def container_members(self, c: ShapeItem) -> list[ShapeItem]:
+        """Formes posées dans le conteneur (centre à l'intérieur, au-dessus de lui)."""
+        box = c.scene_box()
+        return [s for s in self.shapes() if s is not c and not s.sdef.cff and s.zValue() > c.zValue()
+                and box.contains(s.scene_box().center())]
+
+    def containers_of(self, s: ShapeItem) -> list[ShapeItem]:
+        c = s.scene_box().center()
+        return [o for o in self.shapes() if self.is_plain_container(o) and o is not s
+                and o.zValue() < s.zValue() and o.scene_box().contains(c)]
+
+    def container_fit(self, c: ShapeItem, margin_mm: float = 6.0) -> bool:
+        """« Ajuster au contenu » : le conteneur entoure exactement ses formes."""
+        members = self.container_members(c)
+        if not members:
+            return False
+        r = members[0].scene_box()
+        for m in members[1:]:
+            r = r.united(m.scene_box())
+        m = mm_to_px(margin_mm)
+        f = c.text_rect_norm()[3] if c.sdef.text_rect[1] == 0 else 0.0
+        h = (r.height() + 2 * m) / max(0.2, 1.0 - f)
+        w = r.width() + 2 * m
+        top = r.top() - m - f * h
+        self.modify([c], lambda _i, st: st.update(x=r.left() - m + w / 2, y=top + h / 2, w=w, h=h, rotation=0.0),
+                    "Ajuster au contenu")
+        return True
+
+    def container_disband(self, c: ShapeItem) -> None:
+        """« Désassembler le conteneur » : supprime le cadre, garde les formes."""
+        self.delete_items([c], "Désassembler le conteneur")
+
+    def container_select_contents(self, c: ShapeItem) -> None:
+        self.select_items(self.container_members(c))
+
+    def wrap_in_container(self, type_id: str, style: dict | None = None, text_style: dict | None = None):
+        """Insertion > Conteneur avec une sélection : le conteneur entoure les formes choisies."""
+        shapes = [s for s in self.selected_shapes() if not s.sdef.cff]
+        if not shapes:
+            return None
+        r = shapes[0].scene_box()
+        for s in shapes[1:]:
+            r = r.united(s.scene_box())
+        m = mm_to_px(6)
+        sdef = stencils.get(type_id)
+        f = sdef.text_rect[3]
+        h = (r.height() + 2 * m) / (1.0 - f)
+        w = r.width() + 2 * m
+        st = self.new_shape_state(type_id, QPointF(r.left() - m + w / 2, r.top() - m - f * h + h / 2), w, h,
+                                  snap=False)
+        st["z"] = min(s.zValue() for s in shapes) - 1.0
+        if style:
+            st["style"].update(style, themed=False)
+        if text_style:
+            st["text_style"].update(text_style)
+        self.add_states([st], "Insérer un conteneur")
+        item = self.item_by_id(st["id"])
+        self.select_items([item])
+        return item
+
     def cff_memberships(self) -> dict[str, list[str]]:
         """Appartenance aux cadres, couloirs et phases, pour l'export Visio."""
         out: dict[str, list[str]] = {}
@@ -2022,6 +2091,11 @@ class DiagramScene(QGraphicsScene):
                                       others)
             for k, v in m.items():
                 out.setdefault(k, []).extend(c for c in v if c not in out.get(k, []))
+        for c in self.shapes():
+            if self.is_plain_container(c):
+                for s in self.container_members(c):
+                    if c.id not in out.setdefault(s.id, []):
+                        out[s.id].append(c.id)
         return out
 
     def cff_layout(self, text: str = "Disposer les couloirs", prefer: str | None = None) -> None:
