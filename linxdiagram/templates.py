@@ -61,6 +61,25 @@ def build(template: str) -> dict:
     if template == "cff":
         page["shapes"] = cff_states("h", 15, 15, ["Fonction", "Fonction", "Fonction"],
                                     "Titre du diagramme", length_mm=265, lane_mm=48)
+    if template == "flow":
+        shapes = [
+            ("start", "flow.terminator", 105, 30, "Début"),
+            ("capture", "flow.process", 105, 66, "Saisir la demande"),
+            ("check", "flow.decision", 105, 105, "Données valides ?"),
+            ("repair", "flow.process", 45, 147, "Corriger les données"),
+            ("approve", "flow.process", 165, 147, "Valider la demande"),
+            ("process", "flow.subprocess", 105, 190, "Traiter la demande"),
+            ("receipt", "flow.document", 165, 190, "Récapitulatif"),
+            ("end", "flow.terminator", 105, 238, "Terminé"),
+        ]
+        page["shapes"] = [_shape(i, t, x, y, text, n) for n, (i, t, x, y, text) in enumerate(shapes)]
+        links = [("start", "capture", ""), ("capture", "check", ""),
+                 ("check", "repair", "Non"), ("check", "approve", "Oui"),
+                 ("repair", "capture", ""), ("approve", "process", ""),
+                 ("process", "receipt", ""), ("receipt", "end", "")]
+        page["connectors"] = [_conn(f"fc{n}", a, b, 100 + n, text)
+                              for n, (a, b, text) in enumerate(links)]
+        doc["properties"]["title"] = "Diagramme de flux de base"
     if template == "org":
         shapes = [("a", "org.executive", 105, 30, "Direction"),
                   ("b", "org.manager", 55, 75, "Ventes"),
@@ -189,7 +208,7 @@ TEMPLATES = [
 
 def preview(template: str) -> dict:
     """Petit diagramme d'illustration pour la vignette du modèle (comme dans Visio)."""
-    if template in ("sample", "bpmn", "floorplan", "circuit", "org", "network", "uml"):
+    if template in ("flow", "sample", "bpmn", "floorplan", "circuit", "org", "network", "uml"):
         return build(template)
     page = fileformat.default_page("Aperçu")
     if template == "cff":
@@ -208,11 +227,6 @@ def preview(template: str) -> dict:
                                                  "settings": {}, "properties": {}, "pages": [page]})
         return doc
     shapes, links = [], []
-    if template == "flow":
-        shapes = [("a", "flow.terminator", 60, 30, "Début"), ("b", "flow.process", 60, 70, "Étape"),
-                  ("c", "flow.decision", 60, 115, "Choix ?"), ("d", "flow.process", 140, 115, "Action"),
-                  ("e", "flow.terminator", 60, 160, "Fin")]
-        links = [("a", "b"), ("b", "c"), ("c", "d"), ("c", "e")]
     for n, (sid, t, x, y, txt) in enumerate(shapes):
         page["shapes"].append(_shape(sid, t, x, y, txt, n))
     for n, (a, b) in enumerate(links):
