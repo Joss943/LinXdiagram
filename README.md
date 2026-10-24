@@ -41,7 +41,8 @@ Carlito (métriquement identique à Calibri) est utilisée si elle est installé
   formes et leurs modèles de document.
 * **Volets de tâches** : Format de la forme (Remplissage et trait, Effets, Texte, Taille et
   propriétés), Taille et position, Données de forme, Commentaires, Problèmes, Panoramique et zoom,
-  et **Explorateur de dessin** avec recherche et sélection des formes, groupes et connecteurs de la page.
+  et **Explorateur de dessin** avec recherche par texte ou données, sélection des formes, groupes et
+  connecteurs, et navigation sur toutes les pages du document.
 * **Onglets de pages** avec navigation ◀ ▶, menu « Tout » et ⊕ ; **barre d'état** avec page, taille et
   angle de la sélection, langue, mode Présentation et curseur de zoom.
 * **Menu Fichier** façon Microsoft 365 : Accueil (« Bonjour », vignettes de modèles, récents),
