@@ -23,7 +23,7 @@ from . import (APP_NAME, __version__, FILE_EXT, datavis, export, fileformat, ico
 from .backstage import Backstage
 from .canvas import CanvasArea
 from .commands import DocSettingsCommand, PageCommand
-from .dialogs import (DataImportDialog, FindReplaceDialog, ImageExportDialog, LayersDialog,
+from .dialogs import (DataImportDialog, DataLinkDialog, FindReplaceDialog, ImageExportDialog, LayersDialog,
                       OptionsDialog, PageSetupDialog, PasswordDialog, PropertiesDialog,
                       ShapeSheetDialog, ShortcutsDialog, ZoomDialog)
 from .document import Document
@@ -53,6 +53,25 @@ PANES = (("format", "Format de la forme", "format_panel"), ("size", "Taille et p
          ("data", "Données de forme", "shape_data"), ("comments", "Commentaires", "comments"),
          ("issues", "Problèmes", "check_diagram"), ("panzoom", "Panoramique et zoom", "pan_zoom"),
          ("drawing", "Explorateur de dessin", "layers"))
+
+
+def _clean_data_headers(headers: list[str]) -> list[str]:
+    if not headers or len(headers) > fileformat.MAX_DATA_FIELDS:
+        raise datavis.DataError(f"Le CSV doit contenir entre 1 et {fileformat.MAX_DATA_FIELDS} colonnes.")
+    clean = [security.clean_line(h, 100) for h in headers]
+    if any(not h for h in clean) or len(set(clean)) != len(clean):
+        raise datavis.DataError("Pour lier les données, chaque colonne CSV doit avoir un nom unique de 100 caractères maximum.")
+    return clean
+
+
+def _merge_linked_data(existing: dict, old_fields: list[str], headers: list[str], row: list[str]) -> tuple[dict, int]:
+    incoming = {header: row[i] if i < len(row) else "" for i, header in enumerate(headers)}
+    old = set(old_fields)
+    manual = [(key, value) for key, value in existing.items() if key not in old and key not in incoming]
+    room = max(0, fileformat.MAX_DATA_FIELDS - len(incoming))
+    kept = manual[:room]
+    # Les champs du CSV ont priorité, les propriétés manuelles restantes sont conservées si possible.
+    return {**incoming, **dict(kept)}, len(manual) - len(kept)
 
 
 class MainWindow(QMainWindow):
@@ -262,6 +281,12 @@ class MainWindow(QMainWindow):
           lambda: self.create_from_data("org"))
         A("data_flow", "Diagramme de flux à partir de données…", "data_visualizer", None,
           lambda: self.create_from_data("flow"))
+        A("data_link", "Lier les formes à un fichier CSV…", "data_visualizer", None,
+          self.link_data, tip="Associe les formes à des lignes d'un fichier CSV local.")
+        A("data_refresh", "Actualiser les données liées", "data_visualizer", None,
+          self.refresh_linked_data, tip="Relit les fichiers CSV locaux associés aux formes.")
+        A("data_unlink", "Dissocier la sélection", "data_visualizer", None,
+          self.unlink_data, tip="Retire le lien CSV et conserve les données déjà importées.")
         A("shape_report", "Rapports de forme…", "shape_report", None, self.shape_report,
           tip="Exporte la liste des formes et de leurs données (CSV).")
         A("subprocess", "Créer à partir de la sélection", "subprocess", None, self.create_subprocess,
@@ -369,6 +394,7 @@ class MainWindow(QMainWindow):
         self.shapes_panel = ShapesPane()
         self.shapes_panel.shapeActivated.connect(self._add_at_center)
         self.shapes_panel.quickShapeChanged.connect(lambda t: setattr(self.doc, "quick_shape", t))
+        self.shapes_panel.closed.connect(lambda: self.a["show_shapes"].setChecked(False))
         self.shapes_panel.categoriesChanged.connect(lambda: QTimer.singleShot(0, self._update_cff_tab))
         center = QWidget()
         cl = QVBoxLayout(center)
@@ -705,6 +731,11 @@ class MainWindow(QMainWindow):
                 menu=self._menu(a["data_org"], a["data_flow"]),
                 tooltip="<b>Créer à partir de données</b><br>Génère un organigramme ou un diagramme de flux "
                         "à partir d'un fichier CSV.")
+        data.addWidget(g)
+        g = RibbonGroup("Données liées")
+        g.large(a["data_link"])
+        g.large(a["data_refresh"])
+        g.large(a["data_unlink"])
         data.addWidget(g)
         g = RibbonGroup("Afficher/Masquer")
         g.column(self._check(a["pane_data"], "Fenêtre Données de forme"))
@@ -1213,6 +1244,7 @@ class MainWindow(QMainWindow):
         for key in ("shapesheet", "link", "screentip", "new_comment"):
             self.a[key].setEnabled(isinstance(single, ShapeItem))
         self.a["subprocess"].setEnabled(bool(shapes))
+        self.a["data_unlink"].setEnabled(any(s.data_link for s in shapes))
         self.a["open_link"].setEnabled(isinstance(single, ShapeItem) and bool(single.link))
         self.a["delete_comment"].setEnabled(isinstance(single, ShapeItem) and bool(single.comments))
         self._updating_ui = True
@@ -1694,6 +1726,151 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{len(page['shapes'])} formes créées à partir de {os.path.basename(path)}.",
                                      6000)
 
+    def link_data(self) -> None:
+        sc = self.scene()
+        if sc is None:
+            return
+        selected = sc.selected_all()
+        candidates = [it for it in (sc.selected_shapes() if selected else sc.shapes()) if not it.locked]
+        if not candidates:
+            QMessageBox.information(self, "Lier les données", "Aucune forme modifiable sur cette page.")
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Choisir un fichier de données local", self._last_dir(),
+                                              "Fichiers CSV (*.csv *.txt)")
+        if not path:
+            return
+        if path.startswith(("//", "\\\\")):
+            QMessageBox.warning(self, "Lier les données", "Choisissez un fichier enregistré sur cet ordinateur.")
+            return
+        try:
+            headers, rows = datavis.parse_csv(security.read_file_limited(path, 5 * 1024 * 1024))
+            headers = _clean_data_headers(headers)
+        except (security.SecurityError, datavis.DataError) as exc:
+            QMessageBox.warning(self, "Lier les données", str(exc))
+            return
+        dlg = DataLinkDialog(headers, rows, candidates, self)
+        if dlg.exec() != DataLinkDialog.DialogCode.Accepted:
+            return
+        source_key, shape_key = dlg.mapping()
+        source_index = headers.index(source_key)
+        row_by_key: dict[str, list[str]] = {}
+        for row in rows:
+            value = row[source_index].strip() if source_index < len(row) else ""
+            if value:
+                row_by_key[value] = row
+        def shape_value(shape):
+            return shape.text.strip() if shape_key == "__text__" else str(shape.data.get(shape_key, "")).strip()
+        matched = [shape for shape in candidates if shape_value(shape) in row_by_key and shape_value(shape)]
+        if not matched:
+            QMessageBox.information(self, "Lier les données", "Aucune forme ne correspond à cette clé.")
+            return
+        linked_fields = list(headers)
+        link = {"path": os.path.abspath(path), "source_key": source_key,
+                "shape_key": shape_key, "fields": linked_fields}
+        omitted = 0
+        updates: dict[str, tuple[dict, dict]] = {}
+        for shape in matched:
+            row = row_by_key[shape_value(shape)]
+            old_fields = shape.data_link.get("fields", [])
+            data, removed = _merge_linked_data(shape.data, old_fields, linked_fields, row)
+            omitted += removed
+            updates[shape.id] = (data, link)
+
+        def update(_it, state):
+            state["data"], state["data_link"] = updates[_it.id]
+        sc.modify(matched, update, "Lier les données CSV")
+        self.show_pane("data")
+        msg = f"{len(matched)} forme(s) liée(s) à {os.path.basename(path)}."
+        if omitted:
+            msg += f" {omitted} propriété(s) manuelle(s) retirée(s), limite de {fileformat.MAX_DATA_FIELDS} champs par forme."
+        self.statusBar().showMessage(msg, 8000)
+
+    def refresh_linked_data(self) -> None:
+        groups: dict[tuple[str, str, str], list[tuple[object, ShapeItem]]] = {}
+        for page in self.doc.pages:
+            for shape in page.shapes():
+                link = shape.data_link
+                if link:
+                    key = (link.get("path", ""), link.get("source_key", ""), link.get("shape_key", ""))
+                    groups.setdefault(key, []).append((page, shape))
+        if not groups:
+            QMessageBox.information(self, "Actualiser les données", "Aucune forme n'est liée à un fichier CSV.")
+            return
+
+        parsed: dict[str, tuple[list[str], list[list[str]]]] = {}
+        errors: list[str] = []
+        updates_by_page: dict[object, dict[str, tuple[dict, dict]]] = {}
+        updated = unmatched = omitted = 0
+        for (path, source_key, shape_key), entries in groups.items():
+            if path not in parsed:
+                try:
+                    headers, rows = datavis.parse_csv(security.read_file_limited(path, 5 * 1024 * 1024))
+                    parsed[path] = (_clean_data_headers(headers), rows)
+                except (OSError, security.SecurityError, datavis.DataError) as exc:
+                    errors.append(f"{os.path.basename(path) or path} : {exc}")
+                    parsed[path] = ([], [])
+            headers, rows = parsed[path]
+            if not headers:
+                continue
+            if source_key not in headers:
+                errors.append(f"{os.path.basename(path)} : colonne « {source_key} » introuvable.")
+                continue
+            source_index = headers.index(source_key)
+            row_by_key: dict[str, list[str]] = {}
+            duplicate = False
+            for row in rows:
+                value = row[source_index].strip() if source_index < len(row) else ""
+                if not value:
+                    continue
+                if value in row_by_key:
+                    duplicate = True
+                    break
+                row_by_key[value] = row
+            if duplicate:
+                errors.append(f"{os.path.basename(path)} : la colonne « {source_key} » contient des clés en double.")
+                continue
+            for page, shape in entries:
+                value = shape.text.strip() if shape_key == "__text__" else str(shape.data.get(shape_key, "")).strip()
+                row = row_by_key.get(value) if value else None
+                if row is None:
+                    unmatched += 1
+                    continue
+                data, removed = _merge_linked_data(shape.data, shape.data_link.get("fields", []), headers, row)
+                link = dict(shape.data_link, fields=list(headers))
+                updates_by_page.setdefault(page, {})[shape.id] = (data, link)
+                updated += 1
+                omitted += removed
+
+        if updates_by_page:
+            self.doc.undo_stack.beginMacro("Actualiser les données liées")
+            for page, updates in updates_by_page.items():
+                def update(_it, state, values=updates):
+                    state["data"], state["data_link"] = values[_it.id]
+                page.modify([page.item_by_id(item_id) for item_id in updates], update,
+                            "Actualiser les données CSV")
+            self.doc.undo_stack.endMacro()
+        msg = f"{updated} forme(s) actualisée(s)."
+        if unmatched:
+            msg += f" {unmatched} forme(s) sans ligne correspondante ont gardé leurs anciennes données."
+        if omitted:
+            msg += f" {omitted} propriété(s) manuelle(s) retirée(s) pour respecter la limite de champs."
+        if errors:
+            msg += "\n\n" + "\n".join(dict.fromkeys(errors))
+            QMessageBox.warning(self, "Actualisation des données", msg)
+        elif updated:
+            self.statusBar().showMessage(msg, 8000)
+        else:
+            QMessageBox.information(self, "Actualisation des données", msg)
+
+    def unlink_data(self) -> None:
+        sc = self.scene()
+        shapes = [s for s in sc.selected_shapes() if s.data_link and not s.locked] if sc else []
+        if not shapes:
+            return
+        sc.modify(shapes, lambda _it, state: state.pop("data_link", None), "Dissocier les données CSV")
+        self.statusBar().showMessage(f"{len(shapes)} lien(s) CSV retiré(s) ; les données importées sont conservées.",
+                                     6000)
+
     def shape_report(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Rapport de formes",
                                               os.path.join(self._last_dir(), "rapport-formes.csv"),
@@ -2119,6 +2296,10 @@ class MainWindow(QMainWindow):
                 data_menu = menu.addMenu(icons.icon("shape_data"), "Données")
                 data_menu.addAction(icons.icon("shape_data"), "Fenêtre Données de forme",
                                     lambda: self.show_pane("data"))
+                data_menu.addAction(a["data_link"])
+                data_menu.addAction(a["data_refresh"])
+                if single.data_link:
+                    data_menu.addAction(a["data_unlink"])
                 data_menu.addAction(a["shapesheet"])
                 menu.addAction(a["lock"] if not single.locked else a["unlock"])
             if any(isinstance(i, ConnectorItem) for i in sel):

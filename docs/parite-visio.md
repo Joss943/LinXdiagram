@@ -7,10 +7,10 @@ et sans reprendre les éléments de marque ou le code propriétaire de Microsoft
 
 | Domaine | LinXdiagram aujourd’hui | Écart à traiter |
 |---|---|---|
-| Création et mise en page | Ruban, gabarits, pages, groupes, thèmes, connecteurs, règles, grille, guides, calques et validation ; gabarits initiaux BPMN, plan de bureau et circuit | Étendre les bibliothèques BPMN, architecture et ingénierie |
+| Création et mise en page | Ruban et volets inspirés de Visio PC, palette de bureau Office 2024, gabarits, pages, groupes, thèmes, connecteurs, règles, grille, guides, calques et validation ; gabarits initiaux BPMN, plan de bureau et circuit | Étendre les bibliothèques BPMN, architecture et ingénierie |
 | Navigation dans le dessin | Explorateur de dessin filtrable : formes, groupes et connecteurs de la page active | Explorer aussi les pages, calques, objets imbriqués et propriétés du document |
-| Données | Création d’organigrammes et de flux depuis CSV ; données libres par forme et rapports CSV | Liens persistants aux lignes, rafraîchissement des sources et graphiques de données |
-| Fichiers Visio | Import/export VSDX, formes, pages, styles, connecteurs et plusieurs métadonnées | Les formules ShapeSheet ne sont pas exécutées ; VSD binaire, EMF/WMF et objets OLE ne sont pas pris en charge |
+| Données | Création d’organigrammes et de flux depuis CSV ; liaison persistante dans `.lxd` des formes à un CSV local par clé avec actualisation à la demande ; données libres par forme et rapports CSV | Graphiques de données visuels, règles de couleur et plusieurs sources liées |
+| Fichiers Visio | Import/export VSDX, formes, pages, styles, connecteurs et plusieurs métadonnées | Les liens vers CSV restent propres au `.lxd` ; les formules ShapeSheet ne sont pas exécutées ; VSD binaire, EMF/WMF et objets OLE ne sont pas pris en charge |
 | Collaboration | Commentaires locaux et documents hors ligne | Coédition, présence, stockage cloud et intégration Teams hors périmètre actuel |
 | Automatisation | Recherche de commandes, raccourcis et dispositions automatiques | Macros et compléments absents par conception ; ils nécessiteraient un modèle d’exécution isolé |
 | Dessin au stylet | Outils de formes et de lignes | Outils de tracé libre et annotations tactiles à ajouter |
@@ -19,9 +19,9 @@ et sans reprendre les éléments de marque ou le code propriétaire de Microsoft
 
 1. Compléter l’exploration et les outils de navigation du document.
 2. Étendre BPMN, architecture et les bibliothèques d’ingénierie.
-3. Ajouter les graphiques de données et les liens/rafraîchissements de fichiers locaux.
+3. Ajouter des graphiques de données et des règles visuelles aux liaisons CSV locales.
 4. Améliorer la fidélité des aller-retours VSDX et documenter chaque élément non pris en charge.
-5. Garder la coédition et les services cloud hors périmètre tant que l’application reste orientée poste de travail hors ligne.
+5. Garder la coédition et les services cloud hors périmètre pour l’application de bureau hors ligne.
 
 Cette feuille de route ne prétend pas à une parité complète. La comparaison officielle des éditions
 Visio est publiée par [Microsoft Support](https://support.microsoft.com/en-us/visio/compare-visio-versions-and-features).

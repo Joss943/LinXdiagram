@@ -15,23 +15,23 @@ from . import security
 
 FONT_UI = "Inter"
 
-# Microsoft 365 (refonte visuelle 2023) : barre de titre aux couleurs de Visio, onglets sur
-# fond clair soulignés de bleu, ruban dans une carte blanche arrondie, contrôles arrondis.
+# Microsoft 365 / Office 2024 : accents plus vifs, surfaces claires et hiérarchie nette
+# entre barre de titre, onglets, ruban et espace de dessin.
 LIGHT = {
-    "accent": "#3955a3", "accent_hover": "#4a65b0", "accent_pressed": "#2c4588",
-    "accent_text": "#ffffff", "accent_soft": "#e3e9f7", "accent_line": "#3955a3",
-    "titlebar": "#3955a3", "tabbar": "#f0f0f0", "tab_text": "#ffffff", "tab_ink": "#242424",
+    "accent": "#0078d4", "accent_hover": "#106ebe", "accent_pressed": "#005a9e",
+    "accent_text": "#ffffff", "accent_soft": "#deecf9", "accent_line": "#0078d4",
+    "titlebar": "#31549a", "tabbar": "#fafbfc", "tab_text": "#ffffff", "tab_ink": "#242424",
     "ribbon": "#ffffff", "ribbon_border": "#e0e0e0", "separator": "#e0e0e0",
-    "window": "#f0f0f0", "surface": "#ffffff", "surface2": "#fafafa",
+    "window": "#f4f6f8", "surface": "#ffffff", "surface2": "#f7f9fb",
     "text": "#242424", "text2": "#616161", "text3": "#a8a8a8",
-    "hover": "#f0f0f0", "pressed": "#e0e0e0", "checked": "#e3e9f7",
-    "input_border": "#d1d1d1", "input_bottom": "#616161", "border": "#e0e0e0", "canvas": "#e6e6e6",
-    "selection": "#dbe4f7", "tooltip": "#ffffff", "close_hover": "#c42b1c",
+    "hover": "#f1f4f7", "pressed": "#e5ebf2", "checked": "#deecf9",
+    "input_border": "#c8d0d9", "input_bottom": "#616161", "border": "#dfe4ea", "canvas": "#e7e9ec",
+    "selection": "#d8ebfa", "tooltip": "#ffffff", "close_hover": "#c42b1c",
 }
 
 DARK = {
-    "accent": "#7c95dc", "accent_hover": "#3d3d3d", "accent_pressed": "#4a4a4a",
-    "accent_text": "#ffffff", "accent_soft": "#2f3a57", "accent_line": "#8fa6e8",
+    "accent": "#75b8f0", "accent_hover": "#3d3d3d", "accent_pressed": "#4a4a4a",
+    "accent_text": "#ffffff", "accent_soft": "#293b4e", "accent_line": "#75b8f0",
     "titlebar": "#1f1f1f", "tabbar": "#1f1f1f", "tab_text": "#f5f5f5", "tab_ink": "#f5f5f5",
     "ribbon": "#2b2b2b", "ribbon_border": "#3d3d3d", "separator": "#474747",
     "window": "#1f1f1f", "surface": "#292929", "surface2": "#2e2e2e",

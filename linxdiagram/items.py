@@ -250,6 +250,7 @@ class ShapeItem(TextOwner):
         self.flip_h = self.flip_v = False
         self.style: dict = {}
         self.data: dict = {}
+        self.data_link: dict = {}
         self.link = ""
         self.group = ""
         self.image_b64 = ""
@@ -276,6 +277,8 @@ class ShapeItem(TextOwner):
              "data": dict(self.data), "link": self.link, "group": self.group,
              "locked": self.locked, "tip": self.tip, "comments": [dict(c) for c in self.comments],
              "layer": self.layer}
+        if self.data_link:
+            d["data_link"] = dict(self.data_link)
         if self.type_id == "special.image":
             d["image"] = self.image_b64
         if self.type_id == "special.custom":
@@ -300,6 +303,7 @@ class ShapeItem(TextOwner):
         self.text_style = dict(st["text_style"])
         self.text = st["text"]
         self.data = dict(st.get("data", {}))
+        self.data_link = dict(st.get("data_link", {}))
         self.link = st.get("link", "")
         self.group = st.get("group", "")
         if self.type_id == "special.image" and st.get("image", "") != self.image_b64:

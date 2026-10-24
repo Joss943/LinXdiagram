@@ -15,6 +15,8 @@ import binascii
 import hashlib
 import json
 import math
+import ntpath
+import os
 import re
 from typing import Callable
 
@@ -209,6 +211,33 @@ def clean_link(raw) -> str:
     return security.safe_url(raw) or "" if isinstance(raw, str) else ""
 
 
+def clean_data_link(raw) -> dict:
+    """Métadonnées de liaison vers un fichier local, sans accès réseau automatique."""
+    raw = _dict(raw)
+    path = raw.get("path")
+    if (not isinstance(path, str) or not path or len(path) > 2048 or "\x00" in path
+            or not (os.path.isabs(path) or ntpath.isabs(path)) or path.startswith(("//", "\\\\"))):
+        return {}
+    source_key = _line(raw.get("source_key"), 100)
+    shape_key = _line(raw.get("shape_key"), 100)
+    if not source_key or not shape_key:
+        return {}
+    fields: list[str] = []
+    seen: set[str] = set()
+    source_fields = raw.get("fields")
+    if isinstance(source_fields, list):
+        for field in source_fields[:MAX_DATA_FIELDS]:
+            field = _line(field, 100)
+            if field and field not in seen:
+                fields.append(field)
+                seen.add(field)
+    if source_key not in seen:
+        if len(fields) >= MAX_DATA_FIELDS:
+            fields = fields[:MAX_DATA_FIELDS - 1]
+        fields.insert(0, source_key)
+    return {"path": path, "source_key": source_key, "shape_key": shape_key, "fields": fields}
+
+
 def clean_image(raw) -> str:
     if not isinstance(raw, str) or not raw:
         return ""
@@ -275,6 +304,9 @@ def clean_shape(raw, theme: str) -> dict | None:
         "comments": clean_comments(raw.get("comments")),
         "layer": _line(raw.get("layer"), 64),
     }
+    data_link = clean_data_link(raw.get("data_link"))
+    if data_link:
+        shape["data_link"] = data_link
     if stencils.get(type_id).cff and isinstance(raw.get("cff"), dict):
         opts = {k: _bool(raw["cff"].get(k), d) for k, d in (("title", True), ("hidden", False),
                                                             ("rotate", False)) if k in raw["cff"]}

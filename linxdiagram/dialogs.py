@@ -739,3 +739,78 @@ class DataImportDialog(QDialog):
         form.addRow("", self.new_page)
         lay.addLayout(form)
         lay.addWidget(_buttons(self, "Choisir le fichier…"))
+
+
+class DataLinkDialog(QDialog):
+    """Associe les colonnes d'un CSV local aux formes via une clé stable."""
+
+    def __init__(self, headers: list[str], rows: list[list[str]], shapes: list, parent=None):
+        super().__init__(parent)
+        self.headers = headers
+        self.rows = rows
+        self.shapes = shapes
+        self.setWindowTitle("Lier les formes à un fichier CSV")
+        self.setMinimumWidth(520)
+        lay = QVBoxLayout(self)
+        intro = QLabel("Choisissez la colonne du CSV à comparer au texte d'une forme ou à une propriété "
+                       "existante. Les colonnes du fichier seront ajoutées aux données des formes. "
+                       "Le chemin local du fichier est conservé dans le dessin .lxd pour permettre "
+                       "une actualisation ultérieure.")
+        intro.setWordWrap(True)
+        lay.addWidget(intro)
+        form = QFormLayout()
+        self.source_key = QComboBox()
+        for header in headers:
+            self.source_key.addItem(header, header)
+        for i, header in enumerate(headers):
+            if header.casefold() in ("id", "identifiant", "code"):
+                self.source_key.setCurrentIndex(i)
+                break
+        form.addRow("Colonne clé du CSV :", self.source_key)
+        self.shape_key = QComboBox()
+        self.shape_key.addItem("Texte de la forme", "__text__")
+        keys = sorted({key for shape in shapes for key in shape.data}, key=str.casefold)
+        for key in keys:
+            self.shape_key.addItem(f"Donnée : {key}", key)
+        form.addRow("Comparer avec :", self.shape_key)
+        lay.addLayout(form)
+        self.preview = QLabel()
+        self.preview.setWordWrap(True)
+        lay.addWidget(self.preview)
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                        QDialogButtonBox.StandardButton.Cancel)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        lay.addWidget(self.buttons)
+        self.source_key.currentIndexChanged.connect(self._update_preview)
+        self.shape_key.currentIndexChanged.connect(self._update_preview)
+        self._update_preview()
+
+    def mapping(self) -> tuple[str, str]:
+        return str(self.source_key.currentData()), str(self.shape_key.currentData())
+
+    def _update_preview(self) -> None:
+        source_key, shape_key = self.mapping()
+        try:
+            source_index = self.headers.index(source_key)
+        except ValueError:
+            source_index = -1
+        values = [row[source_index].strip() for row in self.rows
+                  if source_index >= 0 and source_index < len(row) and row[source_index].strip()]
+        duplicates = len(values) - len(set(values))
+        source_values = set(values)
+        def shape_value(shape):
+            return shape.text.strip() if shape_key == "__text__" else str(shape.data.get(shape_key, "")).strip()
+        matched = sum(1 for shape in self.shapes if shape_value(shape) in source_values and shape_value(shape))
+        if duplicates:
+            message = f"La colonne contient {duplicates} clé(s) en double. Choisissez une colonne unique."
+            valid = False
+        elif not matched:
+            message = "Aucune forme ne correspond. Vérifiez la clé ou modifiez les données des formes."
+            valid = False
+        else:
+            message = f"Aperçu : {matched} forme(s) correspondent à {len(source_values)} ligne(s) du CSV."
+            valid = True
+        self.preview.setText(message)
+        self.preview.setStyleSheet("color: #b42318;" if not valid else "color: #16803c;")
+        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(valid)

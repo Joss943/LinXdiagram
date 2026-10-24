@@ -3,6 +3,8 @@ position, Données de forme, Commentaires, Problèmes, Panoramique et zoom."""
 
 from __future__ import annotations
 
+import os
+
 from PyQt6.QtCore import QMimeData, QRect, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QIcon, QPainter
 from PyQt6.QtWidgets import (QSizePolicy, QAbstractItemView, QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox,
@@ -169,6 +171,7 @@ class ShapesPane(QWidget):
     shapeActivated = pyqtSignal(str)
     quickShapeChanged = pyqtSignal(str)
     categoriesChanged = pyqtSignal()
+    closed = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -186,6 +189,13 @@ class ShapesPane(QWidget):
         title.setObjectName("PaneTitle")
         head.addWidget(title)
         head.addStretch(1)
+        close = QToolButton()
+        close.setObjectName("PaneClose")
+        close.setIcon(icons.icon("win_close"))
+        close.setIconSize(QSize(14, 14))
+        close.setToolTip("Fermer le volet Formes")
+        close.clicked.connect(self.closed.emit)
+        head.addWidget(close)
         lay.addLayout(head)
         tabs = QHBoxLayout()
         tabs.setContentsMargins(10, 0, 10, 4)
@@ -949,6 +959,11 @@ class ShapeDataPane(QWidget):
         self.hint.setObjectName("Hint")
         self.hint.setWordWrap(True)
         lay.addWidget(self.hint)
+        self.link_status = QLabel()
+        self.link_status.setObjectName("Hint")
+        self.link_status.setWordWrap(True)
+        self.link_status.hide()
+        lay.addWidget(self.link_status)
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["Propriété", "Valeur"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -975,6 +990,13 @@ class ShapeDataPane(QWidget):
         self.table.setRowCount(0)
         self.table.setEnabled(it is not None)
         self.hint.setVisible(it is None)
+        linked = it.data_link if it is not None else {}
+        self.link_status.setVisible(bool(linked))
+        if linked:
+            source = os.path.basename(linked.get("path", "")) or "fichier local"
+            key = linked.get("source_key", "")
+            target = "texte de la forme" if linked.get("shape_key") == "__text__" else linked.get("shape_key", "")
+            self.link_status.setText(f"CSV lié : {source} · {key} ↔ {target}")
         if it is not None:
             for k, v in it.data.items():
                 r = self.table.rowCount()

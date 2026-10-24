@@ -30,6 +30,8 @@ Carlito (métriquement identique à Calibri) est utilisée si elle est installé
 * **Barre de titre** bleue façon Office : barre d'outils Accès rapide (Enregistrer, Annuler avec
   historique, Rétablir), titre du document et zone **« Rechercher (Alt+Q) »** qui trouve et lance
   n'importe quelle commande ou insère une forme par son nom.
+* Thème de bureau inspiré d’Office 2024 : bleu plus vif, onglets et ruban lumineux, canevas gris
+  doux avec feuille blanche ombrée ; volets Formes et propriétés de part et d’autre du canevas.
 * **Ruban** à neuf onglets : Accueil, Insertion, Création, Données, Processus, Révision, Affichage,
   Développeur, Aide ; grands et petits boutons, boutons partagés, galeries, lanceurs de boîte de
   dialogue ↘, réduction du ruban (Ctrl+F1 ou double-clic sur un onglet).
@@ -59,7 +61,7 @@ Carlito (métriquement identique à Calibri) est utilisée si elle est installé
 | Accueil | Coller, couper, copier, reproduire la mise en forme ; police, taille, A⁺/A⁻, effacer la mise en forme, gras, italique, souligné, barré, casse ; alignements ; Pointeur, Connecteur, Texte, outils de dessin ; **Styles rapides** (35 styles), Remplissage, Trait (couleur, épaisseur, tirets, flèches), Effets (ombre, lumière, dégradé) ; Aligner, Position, Premier plan, Arrière-plan, Grouper ; **Modifier la forme**, Calques, Sélectionner par type, Rechercher / Remplacer |
 | Insertion | Page vierge, dupliquer, renommer, supprimer ; Images ; Conteneur, Légende, Connecteur ; Lien (web ou page du document) ; Zone de texte, Info-bulle d'écran, Symbole |
 | Création | Orientation, Taille, **Taille automatique**, Mise en page ; **Thèmes** et **Variantes** ; Arrière-plans, **Bordures et titres** ; **Redisposer la page**, Connecteurs, **sauts de ligne** |
-| Données | **Créer à partir de données** (organigramme ou diagramme de flux depuis un CSV), fenêtre Données de forme, **Rapports de forme** (CSV) |
+| Données | **Créer à partir de données** (organigramme ou diagramme de flux depuis un CSV), lier des formes à un CSV local par clé et actualiser à la demande, fenêtre Données de forme, **Rapports de forme** (CSV) |
 | Processus | **Sous-processus** à partir de la sélection, **Vérifier le diagramme**, fenêtre Problèmes |
 | Diagramme de flux interfonctionnel (contextuel) | Couloir (avant / après), Séparateur, nouveau diagramme horizontal ou vertical, Disposer les couloirs, Orientation du diagramme, Faire pivoter les étiquettes, Styles, Barre de titre, Séparateurs |
 | Révision | **Commentaires** (nouveau, précédent, suivant, supprimer, volet), **verrouiller les formes**, protéger le document |

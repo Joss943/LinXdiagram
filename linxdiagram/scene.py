@@ -7,7 +7,7 @@ import copy
 import secrets
 
 from PyQt6.QtCore import QLineF, QPointF, QRectF, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QPen, QPolygonF
+from PyQt6.QtGui import QColor, QLinearGradient, QPainter, QPen, QPolygonF
 from PyQt6.QtWidgets import QApplication, QGraphicsScene
 
 from . import fileformat, layout, quickstyles, stencils, swimlanes
@@ -20,11 +20,22 @@ GUIDE_TOL_PX = 7.0
 AC_DIST_PX = 18.0
 AC_SIZE_PX = 6.0
 CANVAS_BG = QColor("#e7e9ec")
+_DARK_CANVAS = False
 
 
 def set_dark_canvas(dark: bool) -> None:
     """Fond autour de la page, assorti au thème de l'interface."""
+    global _DARK_CANVAS
+    _DARK_CANVAS = dark
     CANVAS_BG.setRgba(QColor("#2b2d31" if dark else "#e7e9ec").rgba())
+
+
+def paint_canvas_backdrop(painter: QPainter, rect: QRectF) -> None:
+    """Dégradé très doux derrière la feuille, inspiré des surfaces Mica de Visio 2024."""
+    gradient = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+    gradient.setColorAt(0, CANVAS_BG.lighter(112 if _DARK_CANVAS else 105))
+    gradient.setColorAt(1, CANVAS_BG.darker(106 if _DARK_CANVAS else 103))
+    painter.fillRect(rect, gradient)
 GRID_MINOR = QColor("#eceff3")
 GRID_MAJOR = QColor("#d7dce3")
 GUIDE = QColor("#d6336c")
@@ -254,7 +265,7 @@ class DiagramScene(QGraphicsScene):
         if self.exporting:
             painter.fillRect(rect, QColor(self.page_bg))
             return
-        painter.fillRect(rect, CANVAS_BG)
+        paint_canvas_backdrop(painter, rect)
         s = self.view_scale
         painter.fillRect(page.translated(3 / s, 3 / s), QColor(0, 0, 0, 45))
         painter.fillRect(page, QColor(self.page_bg))
