@@ -26,6 +26,7 @@ import re
 import zipfile
 import xml.etree.ElementTree as ET
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPainterPath
 
 from . import APP_NAME, __version__, fileformat, security, stencils, swimlanes
@@ -1124,6 +1125,62 @@ def _data_sections(shape_el, data: dict, link: str, type_id: str | None, contain
         _cell(row, "NewWindow", False)
 
 
+def _data_graphic_snapshot(shapes_el, it, sid: int, page_h: float, fonts: dict,
+                           layer_index: int | None) -> None:
+    """Exporte le graphique comme annotation vectorielle figée, faute de binding Visio natif."""
+    from PyQt6.QtCore import QRectF
+    from PyQt6.QtGui import QFont, QFontMetricsF
+
+    text = it.data_graphic_text()
+    if not text:
+        return
+    rect = it.data_graphic_rect(1.0)
+    if rect.isNull():
+        return
+    center = it.mapToScene(rect.center())
+    width, height = rect.width() / PX_PER_INCH, rect.height() / PX_PER_INCH
+    width_px, height_px = rect.width(), rect.height()
+    fill, ink, border = it.data_graphic_palette()
+    el = _el(shapes_el, "Shape", ID=str(sid), NameU=f"Data graphic.{sid}",
+             Name=f"Graphique de données.{sid}", Type="Shape", LineStyle="0",
+             FillStyle="0", TextStyle="0")
+    _cell(el, "PinX", center.x() / PX_PER_INCH)
+    _cell(el, "PinY", page_h - center.y() / PX_PER_INCH)
+    _cell(el, "Width", width)
+    _cell(el, "Height", height)
+    _cell(el, "LocPinX", width / 2, None, "Width*0.5")
+    _cell(el, "LocPinY", height / 2, None, "Height*0.5")
+    _cell(el, "Angle", -math.radians(it.rotation()))
+    _cell(el, "LineWeight", 0.6, "PT")
+    _cell(el, "LineColor", border)
+    _cell(el, "LinePattern", 1)
+    _cell(el, "FillForegnd", fill)
+    _cell(el, "FillPattern", 1)
+    _cell(el, "FillForegndTrans", 0.0)
+    if layer_index is not None:
+        _cell(el, "LayerMember", str(layer_index), "STR")
+    _cell(el, "TxtPinX", width / 2)
+    _cell(el, "TxtPinY", height / 2)
+    _cell(el, "TxtWidth", width)
+    _cell(el, "TxtHeight", height)
+    _cell(el, "TxtLocPinX", width / 2)
+    _cell(el, "TxtLocPinY", height / 2)
+    margin = 8.0 / PX_PER_INCH
+    for name in ("LeftMargin", "RightMargin"):
+        _cell(el, name, margin)
+    font = QFont("Arial")
+    font.setPixelSize(11)
+    shown = QFontMetricsF(font).elidedText(text, Qt.TextElideMode.ElideRight,
+                                          max(1.0, width_px - 16.0))
+    _text_cells(el, {"font": "Arial", "color": ink, "size": 8.25, "bold": False,
+                     "italic": False, "underline": False, "valign": "middle", "halign": "left"}, fonts)
+    path = QPainterPath()
+    path.addRoundedRect(QRectF(0.0, 0.0, width_px, height_px), 5.0, 5.0)
+    for sub in _path_subpaths(path, width_px, height_px):
+        _geometry_section(el, 0, sub, False, False)
+    _el(el, "Text").text = _xml_text(shown)
+
+
 def _relationships(members: list[str], containers: list[str], ids: dict[str, int]) -> str:
     """Cellule Relationships : DEPENDSON(1, membres) côté conteneur, DEPENDSON(4, conteneurs)
     côté membre, avec des références Sheet.N comme les écrit Visio."""
@@ -1315,6 +1372,15 @@ def _page_xml(scene, images: list[tuple[str, bytes]], fonts: dict) -> tuple[byte
             for which, part, from_part in (("src", "BeginX", 9), ("dst", "EndX", 12)):
                 if glue[which] is not None:
                     connects.append((sid, part, from_part, glue[which]))
+    # Visio n'a pas de ShapeSheet standard pour conserver l'association LinXdiagram :
+    # on ajoute un instantané vectoriel déplaçable séparément, qui reprend l'aspect visible.
+    next_id = len(ids) + 1
+    for it in items:
+        if not isinstance(it, ShapeItem) or not it.data_graphic_text():
+            continue
+        _data_graphic_snapshot(shapes_el, it, next_id, ph, fonts,
+                               layer_ids.get(it.layer) if it.layer else None)
+        next_id += 1
     if connects:
         con_el = _el(root, "Connects")
         for sid, part, from_part, target in connects:
@@ -1335,6 +1401,13 @@ def _rels_xml(rels: list[tuple[str, str, str]]) -> bytes:
 
 def export_vsdx(document, path: str) -> None:
     """Écrit le document au format Visio .vsdx (écriture atomique)."""
+    from .items import ShapeItem
+
+    base_shape_count = sum(len(scene.all_items()) for scene in document.pages)
+    graphic_count = sum(1 for scene in document.pages for it in scene.shapes()
+                        if isinstance(it, ShapeItem) and it.data_graphic_text())
+    if base_shape_count + graphic_count > MAX_SHAPES:
+        raise VsdxError("L'export des graphiques de données dépasserait la limite de formes VSDX.")
     fonts: dict[str, int] = {}
     images: list[tuple[str, bytes]] = []
     page_parts = []

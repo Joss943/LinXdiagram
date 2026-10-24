@@ -413,6 +413,23 @@ class ShapeItem(TextOwner):
         b = self.box()
         return QRectF(b.right() - width, b.bottom() + 5.0 / s, width, height)
 
+    def data_graphic_palette(self) -> tuple[str, str, str]:
+        if self.data_graphic.get("display") == "status":
+            value = self.data.get(self.data_graphic.get("field", ""), "").strip().casefold()
+            value = "".join(c for c in unicodedata.normalize("NFKD", value)
+                            if not unicodedata.combining(c))
+            if value in {"done", "complete", "completed", "termine", "terminee", "success",
+                         "succeeded", "ok", "valide", "validee", "vert", "green"}:
+                return "#e7f4e4", "#237a3b", "#9fcf9b"
+            if value in {"blocked", "bloque", "late", "retard", "error", "failed", "echec",
+                         "critical", "critique", "urgent", "rouge", "red"}:
+                return "#fde7e9", "#a4262c", "#e8a3a6"
+            if value in {"in progress", "en cours", "pending", "en attente", "attention", "orange",
+                         "amber", "yellow", "jaune"}:
+                return "#fff4ce", "#8a4b00", "#e5c66a"
+            return "#f3f4f6", "#374151", "#d1d5db"
+        return "#eff6ff", "#1e3a5f", "#bfdbfe"
+
     def export_paths(self) -> tuple[QPainterPath, QPainterPath | None]:
         """Géométrie non retournée dans le repère (0..w, 0..h), y vers le bas."""
         w, h = self.w, self.h
@@ -720,24 +737,7 @@ class ShapeItem(TextOwner):
         rect = self.data_graphic_rect(s)
         if rect.isNull():
             return
-        display = self.data_graphic.get("display", "label_value")
-        if display == "status":
-            value = self.data.get(self.data_graphic.get("field", ""), "").strip().casefold()
-            value = "".join(c for c in unicodedata.normalize("NFKD", value)
-                            if not unicodedata.combining(c))
-            if value in {"done", "complete", "completed", "termine", "terminee", "success",
-                         "succeeded", "ok", "valide", "validee", "vert", "green"}:
-                fill, ink, border = "#e7f4e4", "#237a3b", "#9fcf9b"
-            elif value in {"blocked", "bloque", "late", "retard", "error", "failed", "echec",
-                           "critical", "critique", "urgent", "rouge", "red"}:
-                fill, ink, border = "#fde7e9", "#a4262c", "#e8a3a6"
-            elif value in {"in progress", "en cours", "pending", "en attente", "attention", "orange",
-                           "amber", "yellow", "jaune"}:
-                fill, ink, border = "#fff4ce", "#8a4b00", "#e5c66a"
-            else:
-                fill, ink, border = "#f3f4f6", "#374151", "#d1d5db"
-        else:
-            fill, ink, border = "#eff6ff", "#1e3a5f", "#bfdbfe"
+        fill, ink, border = self.data_graphic_palette()
         font = QFont("Arial")
         font.setPixelSize(max(1, round(11.0 / s)))
         painter.save()
