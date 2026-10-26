@@ -10,7 +10,7 @@ import math
 import os
 import unicodedata
 
-from PyQt6.QtCore import (QBuffer, QEvent, QIODevice, QMimeData, QPoint, QPointF, QRectF, QSize, Qt,
+from PyQt6.QtCore import (QBuffer, QEvent, QIODevice, QMimeData, QPoint, QPointF, QRect, QRectF, QSize, Qt,
                           QTimer, QUrl)
 from PyQt6.QtGui import (QAction, QActionGroup, QColor, QDesktopServices, QFont, QIcon, QKeySequence,
                          QPainter, QPen, QPixmap)
@@ -121,6 +121,16 @@ def _data_link_field_map(shape: ShapeItem, path: str, headers: list[str], old_li
         out[header] = target
         reserved.add(target)
     return out
+
+
+def tile_rects(n: int, area: QRect) -> list[QRect]:
+    """Emplacements de « Réorganiser tout » : 1, 2 ou 3 colonnes selon le nombre de fenêtres."""
+    if n <= 0:
+        return []
+    cols = 1 if n == 1 else 2 if n <= 4 else 3
+    rows = -(-n // cols)
+    cw, ch = area.width() // cols, area.height() // rows
+    return [QRect(area.x() + (i % cols) * cw, area.y() + (i // cols) * ch, cw, ch) for i in range(n)]
 
 
 class MainWindow(QMainWindow):
@@ -2806,13 +2816,9 @@ class MainWindow(QMainWindow):
         wins = [w for w in self.ctx.windows if w.isVisible()]
         if not wins:
             return
-        area = self._screen_area()
-        cols = 1 if len(wins) == 1 else 2 if len(wins) <= 4 else 3
-        rows = -(-len(wins) // cols)
-        cw, ch = area.width() // cols, area.height() // rows
-        for i, w in enumerate(wins):
+        for w, rect in zip(wins, tile_rects(len(wins), self._screen_area())):
             w.showNormal()
-            w.setGeometry(area.x() + (i % cols) * cw, area.y() + (i // cols) * ch, cw, ch)
+            w.setGeometry(rect)
 
     def cascade_windows(self) -> None:
         wins = [w for w in self.ctx.windows if w.isVisible()]

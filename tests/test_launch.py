@@ -36,6 +36,14 @@ class LaunchTest(unittest.TestCase):
         self.assertNotIn("Traceback", r.stderr)
 
 
+def _widest(window) -> str:
+    """Diagnostic : les widgets qui imposent la plus grande largeur minimale."""
+    from PyQt6.QtWidgets import QWidget
+    rows = sorted(((max(c.minimumSizeHint().width(), c.minimumWidth()), type(c).__name__, c.objectName())
+                   for c in window.findChildren(QWidget) if c.isVisibleTo(window)), reverse=True)
+    return "; ".join(f"{name}#{obj}={w}" for w, name, obj in rows[:12])
+
+
 class SmallScreenTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -45,7 +53,7 @@ class SmallScreenTest(unittest.TestCase):
 
     def test_window_fits_a_laptop_screen(self):
         w = self.ctx.new_window(Document())
-        self.assertLessEqual(w.minimumSizeHint().width(), 1000)
+        self.assertLessEqual(w.minimumSizeHint().width(), 1000, _widest(w))
         w.resize(1366, 740)
         w.show()
         self.app.processEvents()

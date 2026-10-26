@@ -116,10 +116,14 @@ class VisioEditingTest(unittest.TestCase):
         self.assertTrue(DiagramScene.show_ruler_guides)
 
     def test_arrange_windows(self):
+        from PyQt6.QtCore import QRect
+        from linxdiagram.mainwindow import tile_rects
+        rects = tile_rects(3, QRect(0, 0, 1200, 800))
+        self.assertEqual([(r.x(), r.y(), r.width()) for r in rects], [(0, 0, 600), (600, 0, 600), (0, 400, 600)])
+        self.assertEqual(tile_rects(1, QRect(0, 0, 1200, 800))[0].width(), 1200)
         w2 = self.ctx.new_window(Document())
-        self.w.arrange_windows()
-        self.app.processEvents()
-        self.assertNotEqual(self.w.geometry().x(), w2.geometry().x())
+        self.w.arrange_windows()  # ne doit pas échouer ; le placement dépend du gestionnaire de fenêtres
+        self.w.cascade_windows()
         self.w._fill_switch_menu()
         self.assertEqual(len(self.w.switch_menu.actions()), 2)
 

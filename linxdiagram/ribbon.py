@@ -555,6 +555,9 @@ class Ribbon(QWidget):
         self.tabbar.setObjectName("RibbonTabBar")
         self.tabbar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.tabbar.setFixedHeight(36)
+        # Les onglets peuvent être rognés sur une fenêtre étroite, comme dans Office : ils
+        # n'imposent pas de largeur minimale à la fenêtre (le ruban replie déjà ses groupes).
+        self.tabbar.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         tl = QHBoxLayout(self.tabbar)
         tl.setContentsMargins(0, 0, 6, 0)
         tl.setSpacing(0)
