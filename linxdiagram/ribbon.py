@@ -14,6 +14,7 @@ from .style import T
 
 LARGE, SMALL, ICON = range(3)
 LARGE_H = 68
+FIT_MARGIN = 6  # px gardés libres à droite du ruban
 SMALL_H = 22
 
 
@@ -507,7 +508,9 @@ class RibbonPage(QWidget):
         groups = self.groups()
         if not groups:
             return
-        avail = self.width()
+        # Marge de sécurité : les largeurs estimées (polices à métrique fractionnaire, Windows)
+        # peuvent différer d'un pixel des largeurs réelles après mise en page.
+        avail = self.width() - FIT_MARGIN
         for g in groups:
             g.set_collapsed(False)
             for gal in g.galleries():
