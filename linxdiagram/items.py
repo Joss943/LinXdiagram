@@ -20,7 +20,7 @@ from PyQt6.QtGui import (QBrush, QColor, QFont, QImageReader, QKeySequence, QLin
 from PyQt6.QtWidgets import (QApplication, QGraphicsItem, QGraphicsTextItem, QMenu,
                              QStyleOptionGraphicsItem)
 
-from . import security, stencils
+from . import fields, security, stencils
 from .fileformat import MAX_TEXT, clean_data_links, normalize_status_key
 from .routing import axis_direction, curve_controls, route_orthogonal
 from .swimlanes import HEADER as CFF_HEADER, PHASE as CFF_PHASE, TITLE as CFF_TITLE
@@ -171,7 +171,12 @@ class TextOwner(QGraphicsItem):
         self.editing = False
         self._edit_before: dict | None = None
         self._applying = False
+        self.field_scene = None  # page dont les champs sont affichés (pages d'arrière-plan)
         self.label = TextLabel(self)
+
+    def display_text(self) -> str:
+        """Texte affiché : les champs {{…}} sont remplacés par leur valeur."""
+        return fields.expand(self.text, self.field_scene or self.scene(), self)
 
     def state(self) -> dict:  # pragma: no cover - surchargé
         raise NotImplementedError
@@ -182,8 +187,10 @@ class TextOwner(QGraphicsItem):
     def _apply_label_format(self) -> None:
         ts = self.text_style
         lab = self.label
-        if not self.editing and lab.toPlainText() != self.text:
-            lab.setPlainText(self.text)
+        if not self.editing:
+            shown = self.display_text()
+            if lab.toPlainText() != shown:
+                lab.setPlainText(shown)
         lab.setFont(make_font(ts))
         lab.setDefaultTextColor(QColor(ts["color"]))
         doc = lab.document()
@@ -200,6 +207,8 @@ class TextOwner(QGraphicsItem):
             sc.editing_item.finish_edit()
         self._edit_before = self.state()
         self.editing = True
+        if self.label.toPlainText() != self.text:  # champs : on édite le texte brut
+            self.label.setPlainText(self.text)
         sc.editing_item = self
         self.label.setTextInteractionFlags(Qt.TextInteractionFlag.TextEditorInteraction)
         self.label.setAcceptedMouseButtons(Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton)

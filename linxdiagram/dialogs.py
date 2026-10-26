@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QColorDialog, QComboB
                              QListWidgetItem, QProgressBar, QSpinBox, QTableWidget,
                              QTableWidgetItem, QVBoxLayout)
 
-from . import security
+from . import compat, security
 from .fileformat import clean_shape_style, clean_text_style, normalize_status_key
 from .units import PX_PER_INCH
 
@@ -433,7 +433,7 @@ class OptionsDialog(QDialog):
             self.theme.addItem(label, key)
         self.theme.setCurrentIndex(max(0, self.theme.findData(settings.value("ui/theme", "light"))))
         self.native = QCheckBox("Utiliser la barre de titre du système")
-        self.native.setChecked(settings.value("ui/native_titlebar", False, type=bool))
+        self.native.setChecked(settings.value("ui/native_titlebar", compat.IS_MACOS, type=bool))
         form.addRow("Fenêtre", self.native)
         self.user = QLineEdit(settings.value("user/name", ""))
         self.user.setPlaceholderText("Nom affiché dans les commentaires")
@@ -471,6 +471,50 @@ def _buttons(dlg, ok_text: str = "OK") -> QDialogButtonBox:
     b.accepted.connect(dlg.accept)
     b.rejected.connect(dlg.reject)
     return b
+
+
+class FieldDialog(QDialog):
+    """Insertion > Champ : choix d'un champ mis à jour automatiquement, avec aperçu."""
+
+    def __init__(self, parent, scene):
+        super().__init__(parent)
+        from . import fields
+        self._fields = fields
+        self._scene = scene
+        shapes = scene.selected_shapes()
+        self._shape = shapes[0] if len(shapes) == 1 else None
+        self.setWindowTitle("Champ")
+        self.setMinimumWidth(420)
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel("Catégorie et nom du champ :"))
+        self.list = QListWidget()
+        for name, desc in fields.FIELDS:
+            it = QListWidgetItem(desc)
+            it.setData(Qt.ItemDataRole.UserRole, name)
+            self.list.addItem(it)
+        if self._shape is not None:
+            for key in sorted(self._shape.data):
+                it = QListWidgetItem(f"Donnée de forme : {key}")
+                it.setData(Qt.ItemDataRole.UserRole, fields.DATA_PREFIX + key)
+                self.list.addItem(it)
+        self.list.setCurrentRow(0)
+        lay.addWidget(self.list)
+        self.preview = QLabel()
+        self.preview.setTextFormat(Qt.TextFormat.PlainText)
+        lay.addWidget(self.preview)
+        self.list.currentItemChanged.connect(lambda *_: self._update())
+        self.list.itemDoubleClicked.connect(lambda *_: self.accept())
+        lay.addWidget(_buttons(self, "Insérer"))
+        self._update()
+
+    def field(self) -> str:
+        it = self.list.currentItem()
+        return it.data(Qt.ItemDataRole.UserRole) if it is not None else ""
+
+    def _update(self) -> None:
+        name = self.field()
+        value = self._fields.expand(self._fields.token(name), self._scene, self._shape) if name else ""
+        self.preview.setText(f"Aperçu : {value}")
 
 
 class ZoomDialog(QDialog):
@@ -680,6 +724,20 @@ class PageSetupDialog(QDialog):
         self.auto = QCheckBox("Agrandir automatiquement la page")
         self.auto.setChecked(scene.auto_size)
         form.addRow("", self.auto)
+        # Propriétés de la page, comme dans Visio : type et page d'arrière-plan.
+        self.kind = QComboBox()
+        self.kind.addItem("Premier plan", "foreground")
+        self.kind.addItem("Arrière-plan", "background")
+        self.kind.setCurrentIndex(1 if scene.page_kind == "background" else 0)
+        form.addRow("Type :", self.kind)
+        self.backpage = QComboBox()
+        self.backpage.addItem("Aucun", "")
+        for p in scene.background_candidates():
+            self.backpage.addItem(p.page_name, p.page_name)
+        idx = self.backpage.findData(scene.backpage)
+        self.backpage.setCurrentIndex(max(0, idx))
+        self.backpage.setToolTip("Page dont les formes s'affichent sous celles de cette page.")
+        form.addRow("Arrière-plan :", self.backpage)
         self.bg = scene.page_bg
         self.fmt.setCurrentIndex(self.fmt.count() - 1)
         for i in range(self.fmt.count() - 1):
@@ -708,7 +766,8 @@ class PageSetupDialog(QDialog):
     def props(self, base: dict) -> dict:
         return dict(base, name=security.clean_line(self.name.text(), 100) or base["name"],
                     width=self.w.value() * self._px, height=self.h.value() * self._px,
-                    auto_size=self.auto.isChecked())
+                    auto_size=self.auto.isChecked(), kind=self.kind.currentData(),
+                    backpage=self.backpage.currentData() or "")
 
 
 class DataImportDialog(QDialog):

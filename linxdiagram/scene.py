@@ -10,7 +10,7 @@ from PyQt6.QtCore import QLineF, QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen, QPolygonF
 from PyQt6.QtWidgets import QApplication, QGraphicsScene
 
-from . import fileformat, layout, quickstyles, stencils, swimlanes
+from . import fields, fileformat, layout, quickstyles, stencils, swimlanes
 from .commands import AddItemsCommand, RemoveItemsCommand, StateCommand, _shapes_first
 from .items import ACCENT, GLUE, ConnectorItem, ShapeItem, TextLabel, make_item
 from .units import GRID_PX, connector_style, connector_text_style, mm_to_px
@@ -58,6 +58,8 @@ class DiagramScene(QGraphicsScene):
         self.page_h = page["height"]
         self.page_bg = page["background"]
         self.auto_size = page.get("auto_size", False)
+        self.page_kind = page.get("kind", "foreground")
+        self.backpage = page.get("backpage", "")
         self.layers: list[dict] = [dict(lay) for lay in page.get("layers", [])]
         self._items: dict[str, ShapeItem | ConnectorItem] = {}
         self._conn_index: dict[str, set[str]] = {}
@@ -130,6 +132,8 @@ class DiagramScene(QGraphicsScene):
         item = make_item(st)
         self.addItem(item)
         self._items[item.id] = item
+        if fields.has_fields(item.text):
+            item.layout_label()
         if item.layer and self.layers:
             lay = self.layer(item.layer)
             if lay is not None:
@@ -187,14 +191,23 @@ class DiagramScene(QGraphicsScene):
     def page_props(self) -> dict:
         return {"name": self.page_name, "width": self.page_w, "height": self.page_h,
                 "background": self.page_bg, "auto_size": self.auto_size,
+                "kind": self.page_kind, "backpage": self.backpage,
                 "layers": [dict(lay) for lay in self.layers]}
 
     def set_page_props(self, props: dict) -> None:
+        old_name = self.page_name
+        if props["name"] != old_name:
+            # Les pages qui utilisent celle-ci comme arrière-plan suivent le renommage.
+            for p in self.doc.pages:
+                if p is not self and p.backpage == old_name:
+                    p.backpage = props["name"]
         self.page_name = props["name"]
         self.page_w = props["width"]
         self.page_h = props["height"]
         self.page_bg = props["background"]
         self.auto_size = props.get("auto_size", self.auto_size)
+        self.page_kind = props.get("kind", self.page_kind)
+        self.backpage = props.get("backpage", self.backpage)
         self.layers = [dict(lay) for lay in props.get("layers", self.layers)]
         self.apply_layers()
         self.update_scene_rect()
@@ -260,15 +273,72 @@ class DiagramScene(QGraphicsScene):
                 "connectors": [i.state() for i in items if isinstance(i, ConnectorItem)]}
 
     # ------------------------------------------------------------------ dessin
+    def background_scene(self):
+        """Page d'arrière-plan affichée sous celle-ci (comme dans Visio), ou None."""
+        if not self.backpage:
+            return None
+        for p in self.doc.pages:
+            if p is not self and p.page_name == self.backpage and p.page_kind == "background":
+                return p
+        return None
+
+    def background_candidates(self) -> list:
+        """Pages d'arrière-plan assignables sans créer de boucle."""
+        out = []
+        for p in self.doc.pages:
+            if p is self or p.page_kind != "background":
+                continue
+            cur, ok, seen = p, True, set()
+            while cur is not None and id(cur) not in seen:
+                if cur is self:
+                    ok = False
+                    break
+                seen.add(id(cur))
+                cur = cur.background_scene()
+            if ok:
+                out.append(p)
+        return out
+
+    _painting_backgrounds: set[int] = set()
+
+    def _paint_background_page(self, painter: QPainter) -> None:
+        bg = self.background_scene()
+        if bg is None or id(bg) in DiagramScene._painting_backgrounds:
+            return
+        # Rendu « comme à l'export » sans toucher à la sélection de l'autre page : modifier son
+        # état émettrait changed() et relancerait sans fin le dessin des pages dépendantes.
+        DiagramScene._painting_backgrounds.add(id(bg))
+        # Les champs (n° de page…) d'un arrière-plan prennent la valeur de la page affichée.
+        with_fields = [it for it in bg.all_items() if fields.has_fields(it.text)]
+        for it in with_fields:
+            it.field_scene = self
+            it.layout_label()
+        old = bg.exporting, bg.page_bg
+        bg.exporting, bg.page_bg = True, "#00000000"
+        try:
+            src = QRectF(0, 0, self.page_w, self.page_h)
+            painter.save()
+            painter.setClipRect(src)
+            bg.render(painter, src, src, Qt.AspectRatioMode.IgnoreAspectRatio)
+            painter.restore()
+        finally:
+            bg.exporting, bg.page_bg = old
+            for it in with_fields:
+                it.field_scene = None
+                it.layout_label()
+            DiagramScene._painting_backgrounds.discard(id(bg))
+
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:  # noqa: N802
         page = self.page_rect()
         if self.exporting:
             painter.fillRect(rect, QColor(self.page_bg))
+            self._paint_background_page(painter)
             return
         paint_canvas_backdrop(painter, rect)
         s = self.view_scale
         painter.fillRect(page.translated(3 / s, 3 / s), QColor(0, 0, 0, 45))
         painter.fillRect(page, QColor(self.page_bg))
+        self._paint_background_page(painter)
         if self.doc.settings["grid"]:
             area = rect.intersected(page)
             if not area.isEmpty():
@@ -1246,6 +1316,167 @@ class DiagramScene(QGraphicsScene):
             else:
                 st["y"] += targets[it.id]
         self.modify(shapes, dist, "Distribuer")
+
+    # ------------------------------------------------------------------ opérations sur les formes
+    SHAPE_OPERATIONS = {"union": "Union", "combine": "Combiner", "fragment": "Fragmenter",
+                        "intersect": "Intersection", "subtract": "Soustraire"}
+
+    @staticmethod
+    def path_commands(path: QPainterPath, rect: QRectF) -> list:
+        """Convertit un chemin en commandes normalisées d'une forme personnalisée."""
+        w, h = max(rect.width(), 1e-6), max(rect.height(), 1e-6)
+
+        def nx(x):
+            return (x - rect.left()) / w
+
+        def ny(y):
+            return (y - rect.top()) / h
+
+        out: list = []
+        start = None
+        last = None
+        i, n = 0, path.elementCount()
+        ET = QPainterPath.ElementType
+        while i < n and len(out) < fileformat.MAX_PATH_COMMANDS - 2:
+            e = path.elementAt(i)
+            if e.type == ET.MoveToElement:
+                if start is not None and last is not None and \
+                        abs(last[0] - start[0]) < 1e-6 and abs(last[1] - start[1]) < 1e-6:
+                    out.append(["Z"])
+                start = last = (e.x, e.y)
+                out.append(["M", nx(e.x), ny(e.y)])
+                i += 1
+            elif e.type == ET.LineToElement:
+                last = (e.x, e.y)
+                out.append(["L", nx(e.x), ny(e.y)])
+                i += 1
+            elif e.type == ET.CurveToElement and i + 2 < n:
+                c2, end = path.elementAt(i + 1), path.elementAt(i + 2)
+                last = (end.x, end.y)
+                out.append(["C", nx(e.x), ny(e.y), nx(c2.x), ny(c2.y), nx(end.x), ny(end.y)])
+                i += 3
+            else:
+                i += 1
+        if start is not None and last is not None and \
+                abs(last[0] - start[0]) < 1e-6 and abs(last[1] - start[1]) < 1e-6:
+            out.append(["Z"])
+        return out
+
+    def _operation_paths(self, op: str, paths: list[QPainterPath]) -> list[QPainterPath]:
+        base, others = paths[0], paths[1:]
+        if op == "union":
+            result = QPainterPath(base)
+            for p in others:
+                result = result.united(p)
+            return [result.simplified()]
+        if op == "combine":
+            # Les zones superposées deviennent des trous (règle pair-impair), comme dans Visio.
+            result = QPainterPath(base)
+            for p in others:
+                result.addPath(p)
+            result.setFillRule(Qt.FillRule.OddEvenFill)
+            return [result]
+        if op == "intersect":
+            result = QPainterPath(base)
+            for p in others:
+                result = result.intersected(p)
+            return [result.simplified()]
+        if op == "subtract":
+            result = QPainterPath(base)
+            for p in others:
+                result = result.subtracted(p)
+            return [result.simplified()]
+        # Fragmenter : découpe en morceaux à chaque chevauchement.
+        pieces: list[QPainterPath] = []
+        covered = QPainterPath()
+        for p in paths:
+            nxt = []
+            for r in pieces:
+                nxt.append(r.intersected(p))
+                nxt.append(r.subtracted(p))
+            nxt.append(p.subtracted(covered))
+            covered = covered.united(p)
+            pieces = [r.simplified() for r in nxt if not r.isEmpty()]
+        return pieces
+
+    def shape_operation(self, op: str) -> int:
+        """Union, Combiner, Fragmenter, Intersection ou Soustraire (onglet Développeur de Visio).
+
+        La forme la plus en arrière sert de base : elle donne son style et son texte au résultat,
+        et c'est d'elle que les autres sont soustraites."""
+        shapes = [s for s in self.selected_shapes()
+                  if not s.locked and not s.sdef.cff and s.type_id != "special.image"]
+        need = 1 if op == "fragment" else 2
+        if len(shapes) < need:
+            return 0
+        shapes.sort(key=lambda s: s.zValue())
+        paths = []
+        for s in shapes:
+            p = s.mapToScene(s._outline)
+            p.setFillRule(Qt.FillRule.WindingFill)
+            paths.append(p.simplified())
+        results = [p for p in self._operation_paths(op, paths)
+                   if not p.isEmpty() and p.boundingRect().width() * p.boundingRect().height() > 1]
+        base = shapes[0]
+        states = []
+        for k, path in enumerate(results):
+            rect = path.boundingRect()
+            if rect.width() < 1 or rect.height() < 1:
+                continue
+            commands = self.path_commands(path, rect)
+            if len(commands) < 2:
+                continue
+            st = self.new_shape_state("special.custom", rect.center(), rect.width(), rect.height(),
+                                      snap=False)
+            st["path"] = commands
+            st["style"] = dict(base.style, rounding=0)
+            st["text_style"] = dict(base.text_style)
+            st["text"] = base.text if k == 0 else ""
+            st["layer"] = base.layer
+            st["z"] = base.zValue() + k * 0.001
+            states.append(st)
+        if not states:
+            return 0
+        text = self.SHAPE_OPERATIONS.get(op, "Opération")
+        self.doc.undo_stack.beginMacro(text)
+        self._delete_now(shapes, text)
+        self.add_states(states, text)
+        self.doc.undo_stack.endMacro()
+        return len(states)
+
+    # ------------------------------------------------------------------ espacement automatique
+    def auto_space(self, gap_mm: float = 7.5) -> bool:
+        """« Espacement automatique » : aligne les formes sur leur axe dominant et les espace
+        régulièrement. Sans sélection, s'applique à toutes les formes de la page."""
+        shapes = [s for s in (self.selected_shapes() or self.shapes())
+                  if not s.locked and not s.sdef.cff and not s.sdef.container]
+        if len(shapes) < 2:
+            return False
+        boxes = {s.id: s.scene_box() for s in shapes}
+        xs = [b.center().x() for b in boxes.values()]
+        ys = [b.center().y() for b in boxes.values()]
+        horiz = (max(xs) - min(xs)) >= (max(ys) - min(ys))
+        shapes.sort(key=lambda s: boxes[s.id].center().x() if horiz else boxes[s.id].center().y())
+        gap = mm_to_px(gap_mm)
+        first = boxes[shapes[0].id]
+        axis = first.center().y() if horiz else first.center().x()
+        cur = first.left() if horiz else first.top()
+        targets = {}
+        for s in shapes:
+            b = boxes[s.id]
+            if horiz:
+                targets[s.id] = (cur - b.left(), axis - b.center().y())
+                cur += b.width() + gap
+            else:
+                targets[s.id] = (axis - b.center().x(), cur - b.top())
+                cur += b.height() + gap
+
+        def sp(it, st):
+            dx, dy = targets[it.id]
+            st["x"] += dx
+            st["y"] += dy
+        self.modify(shapes, sp, "Espacement automatique")
+        return True
 
     def rotate_selection(self, degrees: float) -> None:
         def rot(it, st):

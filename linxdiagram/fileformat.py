@@ -498,7 +498,31 @@ def clean_properties(raw) -> dict:
 def default_page(name: str = "Page-1") -> dict:
     w, h = PAGE_SIZES[DEFAULT_PAGE]
     return {"name": name, "width": mm_to_px(w), "height": mm_to_px(h), "background": "#ffffff",
-            "auto_size": False, "layers": [], "shapes": [], "connectors": []}
+            "auto_size": False, "kind": "foreground", "backpage": "", "layers": [], "shapes": [],
+            "connectors": []}
+
+
+PAGE_KINDS = ("foreground", "background")
+
+
+def resolve_backpages(pages: list[dict]) -> None:
+    """Supprime les références d'arrière-plan invalides : page absente, page de premier plan,
+    référence à soi-même ou boucle (A → B → A). Modifie ``pages`` en place."""
+    by_name = {p["name"]: p for p in pages}
+    for p in pages:
+        target = by_name.get(p.get("backpage", ""))
+        if target is None or target is p or target.get("kind") != "background":
+            p["backpage"] = ""
+    for p in pages:
+        seen = {p["name"]}
+        cur = p
+        while cur.get("backpage"):
+            nxt = by_name[cur["backpage"]]
+            if nxt["name"] in seen:
+                cur["backpage"] = ""
+                break
+            seen.add(nxt["name"])
+            cur = nxt
 
 
 # ------------------------------------------------------------------- document
@@ -540,10 +564,13 @@ def validate_document(raw) -> tuple[dict, list[str]]:
             "height": _num(praw.get("height"), 50, 50_000, mm_to_px(297)),
             "background": _color(praw.get("background"), "#ffffff", allow_none=False),
             "auto_size": _bool(praw.get("auto_size"), False),
+            "kind": _choice(praw.get("kind"), PAGE_KINDS, "foreground"),
+            "backpage": _line(praw.get("backpage"), 100),
             "layers": clean_layers(praw.get("layers")),
             "shapes": shapes,
             "connectors": connectors,
         })
+    resolve_backpages(pages)
     doc = {"format": FORMAT, "version": VERSION, "settings": settings,
            "properties": clean_properties(raw.get("properties")), "pages": pages}
     return doc, _dedupe(warnings)

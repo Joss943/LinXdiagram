@@ -23,6 +23,13 @@ Toutes les données sont stockées localement, sous votre seul contrôle :
 | Copies de récupération automatique | `~/.local/share/LinXdiagram/autosave/` | Supprimées à la fermeture normale du document ; sinon supprimer le dossier |
 | Journal des erreurs (texte technique, sans contenu de document) | `~/.local/state/LinXdiagram/erreurs.log` | Supprimer le fichier |
 
+Emplacements indiqués pour Linux. Sous **Windows**, les réglages sont dans le registre
+(`HKEY_CURRENT_USER\Software\LinXdiagram`) et les autres fichiers dans
+`%LOCALAPPDATA%\LinXdiagram\` (`autosave\`, `Logs\erreurs.log`). Sous **macOS**, les réglages
+sont dans `~/Library/Preferences/` (fichier `com.linxdiagram.LinXdiagram.plist`), les copies de
+récupération dans `~/Library/Application Support/LinXdiagram/autosave/` et le journal dans
+`~/Library/Logs/LinXdiagram/erreurs.log`.
+
 Les fichiers sont créés avec des droits réservés à votre compte (0600). Les copies de
 récupération d'un document protégé par mot de passe restent chiffrées.
 

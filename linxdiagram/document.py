@@ -7,7 +7,7 @@ import secrets
 from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtGui import QUndoStack
 
-from . import fileformat
+from . import fields, fileformat
 from .scene import DiagramScene
 
 
@@ -33,7 +33,37 @@ class Document(QObject):
         self.settings["autoconnect"] = True
         self.properties = fileformat.clean_properties(data.get("properties"))
         self.pages: list[DiagramScene] = [DiagramScene(self, p) for p in data["pages"]]
+        self.undo_stack.indexChanged.connect(self._refresh_dependents)
+        self.pagesChanged.connect(self.refresh_fields)
+        self.refresh_fields()
         self.undo_stack.setClean()
+
+    # -------------------------------------------------------------- arrière-plans
+    def _refresh_dependents(self, _index: int = 0) -> None:
+        """Après chaque modification, les pages qui affichent un arrière-plan sont redessinées.
+
+        On s'appuie sur la pile d'annulation plutôt que sur QGraphicsScene.changed : le rendu
+        d'un arrière-plan modifie temporairement ses étiquettes de champs, ce qui relancerait
+        sinon le dessin sans fin."""
+        for p in self.pages:
+            if p.background_scene() is not None:
+                p.update()
+
+    def refresh_fields(self) -> None:
+        """Recalcule les champs affichés (numéros de page, propriétés du document…)."""
+        for p in self.pages:
+            for it in p.all_items():
+                if fields.has_fields(it.text):
+                    it.layout_label()
+                    it.update()
+
+    def background_pages(self) -> list[DiagramScene]:
+        return [p for p in self.pages if p.page_kind == "background"]
+
+    def printable_pages(self) -> list[DiagramScene]:
+        """Pages imprimées et exportées : les arrière-plans n'apparaissent qu'à travers les pages
+        de premier plan qui les utilisent, comme dans Visio."""
+        return [p for p in self.pages if p.page_kind == "foreground"] or list(self.pages)
 
     # -------------------------------------------------------------- état
     def is_modified(self) -> bool:

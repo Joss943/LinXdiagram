@@ -11,7 +11,7 @@ import os
 from PyQt6.QtGui import QColor, QFont, QPalette
 from PyQt6.QtWidgets import QApplication
 
-from . import security
+from . import compat, security
 
 FONT_UI = "Inter"
 
@@ -50,10 +50,7 @@ def is_dark() -> bool:
 
 
 def _asset_dir() -> str:
-    base = os.environ.get("XDG_RUNTIME_DIR")
-    if not base or not os.path.isdir(base):
-        base = os.path.join(os.path.expanduser("~"), ".cache")
-    return security.private_dir(os.path.join(base, "linxdiagram-ui"))
+    return security.private_dir(compat.runtime_dir())
 
 
 def _write_assets(t: dict) -> dict[str, str]:

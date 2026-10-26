@@ -594,9 +594,9 @@ class _Importer:
         pages_xml = self.pkg.xml(pages_part)
         page_rels = self.pkg.rels(pages_part)
         pages = []
+        id_to_name: dict[str, str] = {}
+        backpage_ids: list[str] = []
         for page in pages_xml.findall(_v("Page")):
-            if page.get("Background") == "1":
-                self.warn("Les pages d'arrière-plan Visio ont été importées comme pages normales.")
             sheet_elem = page.find(_v("PageSheet"))
             ps = _Sheet(sheet_elem) if sheet_elem is not None else None
             pw = (ps.num("PageWidth", 8.5) if ps else 8.5) or 8.5
@@ -612,6 +612,10 @@ class _Importer:
                     self.layer_names.append(security.clean_line(cells.get("Name") or cells.get("NameUniv") or
                                                                 f"Calque {len(self.layer_names) + 1}", 64))
             page_dict = self._load_page(part, name, pw, ph)
+            # Pages d'arrière-plan : attribut Background et référence BackPage par identifiant.
+            page_dict["kind"] = "background" if page.get("Background") == "1" else "foreground"
+            id_to_name.setdefault(page.get("ID", ""), name)
+            backpage_ids.append(page.get("BackPage", ""))
             if ps is not None:
                 seen = set()
                 for _key, cells in ps.named_rows("Layer"):
@@ -626,6 +630,8 @@ class _Importer:
                 break
         if not pages:
             raise VsdxError("Aucune page dans ce document Visio.")
+        for page_dict, back_id in zip(pages, backpage_ids):
+            page_dict["backpage"] = id_to_name.get(back_id, "") if back_id else ""
         return {"format": fileformat.FORMAT, "version": fileformat.VERSION,
                 "settings": {"route": "orthogonal"}, "properties": {}, "pages": pages}
 
@@ -1380,7 +1386,7 @@ def _page_xml(scene, images: list[tuple[str, bytes]], fonts: dict) -> tuple[byte
                 rel = ET.SubElement(fd, _v("Rel"))
                 rel.set(f"{{{RNS}}}id", rid)
             if st["text"]:
-                _el(el, "Text").text = _xml_text(st["text"])
+                _el(el, "Text").text = _xml_text(it.display_text())
         elif isinstance(it, ConnectorItem):
             st = it.state()
             p1, p2 = it.end_points()
@@ -1447,7 +1453,7 @@ def _page_xml(scene, images: list[tuple[str, bytes]], fonts: dict) -> tuple[byte
                 _cell(row, "X", x / PX_PER_INCH - bx)
                 _cell(row, "Y", (ph - y / PX_PER_INCH) - by)
             if st["text"]:
-                _el(el, "Text").text = _xml_text(st["text"])
+                _el(el, "Text").text = _xml_text(it.display_text())
             for which, part, from_part in (("src", "BeginX", 9), ("dst", "EndX", 12)):
                 if glue[which] is not None:
                     connects.append((sid, part, from_part, glue[which]))
@@ -1546,6 +1552,11 @@ def export_vsdx(document, path: str) -> None:
     for i, scene in enumerate(document.pages):
         name = _xml_text(scene.page_name)
         p = _el(pages_el, "Page", ID=str(i), NameU=name, Name=name)
+        if scene.page_kind == "background":
+            p.set("Background", "1")
+        bg = scene.background_scene()
+        if bg is not None:
+            p.set("BackPage", str(document.pages.index(bg)))
         sheet = _el(p, "PageSheet", LineStyle="0", FillStyle="0", TextStyle="0")
         _cell(sheet, "PageWidth", scene.page_w / PX_PER_INCH)
         _cell(sheet, "PageHeight", scene.page_h / PX_PER_INCH)

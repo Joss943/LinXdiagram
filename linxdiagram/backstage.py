@@ -509,7 +509,7 @@ class Backstage(QWidget):
     def _pages_to_print(self):
         if self.which.currentIndex() == 1 and self.win.scene() is not None:
             return [self.win.scene()]
-        return list(self.win.doc.pages)
+        return self.win.doc.printable_pages()
 
     def _paint_preview(self, printer) -> None:
         from .export import print_pages
@@ -552,7 +552,9 @@ class Backstage(QWidget):
                  ("save_as", "save", f"Dessin {APP_NAME} (*.lxd)", "Format natif, chiffrable par mot de passe."),
                  ("export_png", "png", "Image PNG (*.png)", "Image de haute qualité, fond transparent possible."),
                  ("export_jpg", "image", "Image JPEG (*.jpg)", "Image compressée pour le web et les e-mails."),
-                 ("export_svg", "svg", "Graphique vectoriel SVG (*.svg)", "Pour le web ou Inkscape."))
+                 ("export_svg", "svg", "Graphique vectoriel SVG (*.svg)", "Pour le web ou Inkscape."),
+                 ("export_html", "export_html", "Page web (*.html)",
+                  "Toutes les pages dans un fichier HTML autonome, sans script."))
         for i, (cmd, ic, title, text) in enumerate(types):
             b = QToolButton()
             b.setIcon(icons.icon(ic))

@@ -19,12 +19,12 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, Q
                              QMainWindow, QMenu, QMessageBox, QSlider, QSplitter,
                              QStackedWidget, QTabBar, QToolButton, QVBoxLayout, QWidget, QWidgetAction)
 
-from . import (APP_NAME, __version__, FILE_EXT, datavis, export, fileformat, icons, quickstyles, security,
-               stencils, swimlanes, templates, vsdx)
+from . import (APP_NAME, __version__, FILE_EXT, compat, datavis, export, fields, fileformat, icons, quickstyles,
+               security, stencils, swimlanes, templates, vsdx)
 from .backstage import Backstage
 from .canvas import CanvasArea
 from .commands import DocSettingsCommand, PageCommand
-from .dialogs import (DataGraphicDialog, DataImportDialog, DataLinkDialog, FindReplaceDialog,
+from .dialogs import (DataGraphicDialog, DataImportDialog, DataLinkDialog, FieldDialog, FindReplaceDialog,
                       ImageExportDialog, LayersDialog, OptionsDialog, PageSetupDialog, PasswordDialog, PropertiesDialog,
                       ShapeSheetDialog, ShortcutsDialog, ZoomDialog)
 from .document import Document
@@ -134,7 +134,7 @@ class MainWindow(QMainWindow):
         self._updating_ui = False
         self._presentation = None
         self._paste_count = 0
-        self.native_frame = self.settings.value("ui/native_titlebar", False, type=bool)
+        self.native_frame = self.settings.value("ui/native_titlebar", compat.IS_MACOS, type=bool)
         if not self.native_frame:
             self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
             self.resizer = FramelessResizer(self)
@@ -224,6 +224,7 @@ class MainWindow(QMainWindow):
         A("export_png", "Exporter en PNG…", "png", None, lambda: self.export_image("png"))
         A("export_jpg", "Exporter en JPEG…", "image", None, lambda: self.export_image("jpg"))
         A("export_svg", "Exporter en SVG…", "svg", None, self.export_svg)
+        A("export_html", "Enregistrer comme page web…", "export_html", None, self.export_html)
         A("export_vsdx", "Exporter au format Visio…", "visio", None, self.export_vsdx,
           label="Exporter .vsdx")
         A("print", "Imprimer", "print", SK.Print, lambda: self.show_backstage("print"))
@@ -305,6 +306,17 @@ class MainWindow(QMainWindow):
           self._sc(lambda s: s.distribute("h")))
         A("distribute_v", "Distribuer verticalement", "distribute_v", None,
           self._sc(lambda s: s.distribute("v")))
+        A("auto_space", "Espacement automatique", "auto_space", None, self.auto_space,
+          tip="Aligne les formes et les espace régulièrement (toute la page si rien n'est sélectionné).")
+        for key, text, tip in (
+                ("union", "Union", "Fusionne les formes sélectionnées en une seule."),
+                ("combine", "Combiner", "Réunit les formes ; les zones superposées deviennent des trous."),
+                ("fragment", "Fragmenter", "Découpe les formes en morceaux à chaque chevauchement."),
+                ("intersect", "Intersection", "Ne garde que la zone commune aux formes."),
+                ("subtract", "Soustraire", "Retire les autres formes de la forme la plus en arrière.")):
+            A(f"op_{key}", text, f"shape_{key}", None, lambda k=key: self.shape_operation(k), tip=tip)
+        A("insert_field", "Champ…", "field", None, self.insert_field,
+          tip="Insère un champ (numéro de page, date, titre, donnée de forme…) mis à jour automatiquement.")
         A("lock", "Verrouiller la forme", "lock", None, self._sc(lambda s: s.set_locked(s.selected_shapes(), True)),
           tip="Empêche de déplacer, redimensionner ou supprimer les formes sélectionnées.")
         A("unlock", "Déverrouiller la forme", "lock", None,
@@ -313,6 +325,8 @@ class MainWindow(QMainWindow):
         A("page_add", "Page vierge", "page_add", None, self.add_page, tip="Insère une nouvelle page.")
         A("page_dup", "Dupliquer la page", "page_dup", None, self.duplicate_page)
         A("page_del", "Supprimer la page", "page_del", None, self.delete_page)
+        A("page_bg_add", "Page d'arrière-plan", "page_background", None, self.add_background_page,
+          tip="Insère une page d'arrière-plan dont les formes apparaissent sous la page active.")
         A("page_rename", "Renommer la page…", "page_rename", None, self.rename_page)
         A("image", "Images", "image", None, self.insert_image_dialog, tip="Insère une image PNG ou JPEG.")
         A("textbox", "Zone de texte", "textbox", None, lambda: self._insert("basic.text"))
@@ -663,8 +677,8 @@ class MainWindow(QMainWindow):
                                 a["align_top"], a["align_middle"], a["align_bottom"]),
                 tooltip="<b>Aligner</b><br>Aligne les formes sélectionnées.")
         g.large(None, text="Position", icon_name="position",
-                menu=self._menu(a["distribute_h"], a["distribute_v"], None, a["rotate_right"],
-                                a["rotate_left"], a["flip_h"], a["flip_v"]),
+                menu=self._menu(a["auto_space"], None, a["distribute_h"], a["distribute_v"], None,
+                                a["rotate_right"], a["rotate_left"], a["flip_h"], a["flip_v"]),
                 tooltip="<b>Position</b><br>Distribuer, faire pivoter, retourner.")
         g.column(R(a["front"], SMALL, menu=self._menu(a["front"], a["forward"]), split=True),
                  R(a["back"], SMALL, menu=self._menu(a["back"], a["backward"]), split=True),
@@ -691,8 +705,8 @@ class MainWindow(QMainWindow):
         # ======================================================= Insertion
         ins = self.ribbon.add_page("Insertion")
         g = RibbonGroup("Pages")
-        g.large(a["page_add"], menu=self._menu(a["page_add"], a["page_dup"], a["page_rename"], a["page_del"]),
-                split=True)
+        g.large(a["page_add"], menu=self._menu(a["page_add"], a["page_bg_add"], None, a["page_dup"],
+                                               a["page_rename"], a["page_del"]), split=True)
         ins.addWidget(g)
         g = RibbonGroup("Illustrations")
         g.large(a["image"])
@@ -725,7 +739,8 @@ class MainWindow(QMainWindow):
         wa = QWidgetAction(sym)
         wa.setDefaultWidget(holder)
         sym.addAction(wa)
-        g.column(a["screentip"], R(None, SMALL, text="Symbole", icon_name="symbol", menu=sym))
+        g.column(a["screentip"], R(None, SMALL, text="Symbole", icon_name="symbol", menu=sym),
+                 a["insert_field"])
         ins.addWidget(g)
 
         # ======================================================= Création
@@ -896,6 +911,12 @@ class MainWindow(QMainWindow):
         dev = self.ribbon.add_page("Développeur")
         g = RibbonGroup("Afficher")
         g.large(a["shapesheet"])
+        dev.addWidget(g)
+        g = RibbonGroup("Conception de formes")
+        g.large(None, text="Opérations", icon_name="shape_ops",
+                menu=self._menu(a["op_union"], a["op_combine"], a["op_fragment"], a["op_intersect"],
+                                a["op_subtract"]),
+                tooltip="<b>Opérations</b><br>Union, Combiner, Fragmenter, Intersection, Soustraire.")
         dev.addWidget(g)
         g = RibbonGroup("Interopérabilité")
         g.large(a["import_vsdx"])
@@ -1132,8 +1153,9 @@ class MainWindow(QMainWindow):
         self.page_tabs.blockSignals(True)
         while self.page_tabs.count():
             self.page_tabs.removeTab(0)
-        for p in doc.pages:
+        for i, p in enumerate(doc.pages):
             self.page_tabs.addTab(p.page_name)
+            self._page_tab_tip(i, p)
         cur = self.scene()
         if cur in doc.pages:
             self.page_tabs.setCurrentIndex(doc.pages.index(cur))
@@ -1235,6 +1257,15 @@ class MainWindow(QMainWindow):
             act.triggered.connect(lambda _=False, sc=p: self.show_page(sc))
         m.exec(self.all_pages.mapToGlobal(QPoint(0, -m.sizeHint().height())))
 
+    def _page_tab_tip(self, index: int, page) -> None:
+        if page.page_kind == "background":
+            tip = "Page d'arrière-plan"
+        elif page.background_scene() is not None:
+            tip = f"Arrière-plan : {page.backpage}"
+        else:
+            tip = ""
+        self.page_tabs.setTabToolTip(index, security.tooltip_html(tip) if tip else "")
+
     def _after_change(self) -> None:
         st = self.doc.undo_stack
         self.a["undo"].setEnabled(st.canUndo())
@@ -1244,8 +1275,10 @@ class MainWindow(QMainWindow):
         self._update_title()
         self._on_selection()
         for i, p in enumerate(self.doc.pages):
-            if i < self.page_tabs.count() and self.page_tabs.tabText(i) != p.page_name:
-                self.page_tabs.setTabText(i, p.page_name)
+            if i < self.page_tabs.count():
+                if self.page_tabs.tabText(i) != p.page_name:
+                    self.page_tabs.setTabText(i, p.page_name)
+                self._page_tab_tip(i, p)
         sc = self.scene()
         if sc is not None:
             self.a["auto_size"].blockSignals(True)
@@ -2214,6 +2247,59 @@ class MainWindow(QMainWindow):
         idx = self.doc.pages.index(sc) + 1 if sc in self.doc.pages else len(self.doc.pages)
         self.doc.undo_stack.push(PageCommand(self.doc, "Insérer une page", add=page, index=idx))
 
+    # ================================================================== conception de formes
+    def shape_operation(self, op: str) -> None:
+        sc = self.scene()
+        if sc is None:
+            return
+        if not sc.shape_operation(op):
+            need = "une forme" if op == "fragment" else "au moins deux formes qui se chevauchent"
+            self.statusBar().showMessage(f"Sélectionnez {need} (hors images et couloirs).", 6000)
+
+    def auto_space(self) -> None:
+        sc = self.scene()
+        if sc is not None and not sc.auto_space():
+            self.statusBar().showMessage("Il faut au moins deux formes à espacer.", 5000)
+
+    def insert_field(self) -> None:
+        sc = self.scene()
+        if sc is None:
+            return
+        dlg = FieldDialog(self, sc)
+        if dlg.exec() != FieldDialog.DialogCode.Accepted or not dlg.field():
+            return
+        tok = fields.token(dlg.field())
+        item = sc.editing_item
+        if item is not None:
+            item.label.textCursor().insertText(tok)
+            return
+        shapes = sc.selected_shapes()
+        if len(shapes) == 1 and not shapes[0].locked:
+            def add(_it, st):
+                st["text"] = (st["text"] + " " + tok).strip() if st["text"] else tok
+            sc.modify(shapes, add, "Insérer un champ")
+            return
+        view_center = self.view.mapToScene(self.view.viewport().rect().center())
+        st = sc.new_shape_state("basic.text", view_center)
+        st["text"] = tok
+        sc.add_states([st], "Insérer un champ")
+
+    def add_background_page(self) -> None:
+        """Insère une page d'arrière-plan et l'affecte à la page active si elle n'en a pas."""
+        sc = self.scene()
+        data = fileformat.default_page(self.doc.unique_page_name("Arrière-plan"))
+        data["width"], data["height"] = sc.page_w, sc.page_h
+        data["kind"] = "background"
+        page = self.doc.make_page(data=data)
+        self.doc.undo_stack.beginMacro("Insérer une page d'arrière-plan")
+        if sc.page_kind == "foreground" and not sc.background_scene():
+            before = sc.page_props()
+            self.doc.undo_stack.push(PageCommand(self.doc, "Affecter l'arrière-plan", scene=sc,
+                                                 before=before, after=dict(before, backpage=data["name"])))
+        self.doc.undo_stack.push(PageCommand(self.doc, "Insérer une page d'arrière-plan", add=page,
+                                             index=len(self.doc.pages)))
+        self.doc.undo_stack.endMacro()
+
     def duplicate_page(self) -> None:
         sc = self.scene()
         data = sc.to_dict()
@@ -2554,6 +2640,7 @@ class MainWindow(QMainWindow):
             "save": self.save, "save_as": self.save_as, "close": self.close,
             "export_pdf": self.export_pdf, "export_png": lambda: self.export_image("png"),
             "export_jpg": lambda: self.export_image("jpg"), "export_svg": self.export_svg,
+            "export_html": self.export_html,
             "export_vsdx": self.export_vsdx, "import_vsdx": self.import_vsdx_dialog,
             "protect": self.protect, "unprotect": self.unprotect, "properties": self.edit_properties,
             "options": self.show_options, "check_diagram": self.check_diagram,
@@ -2602,8 +2689,7 @@ class MainWindow(QMainWindow):
 
     # ================================================================== fichiers
     def _last_dir(self) -> str:
-        docs = os.path.expanduser("~/Documents")
-        return self.settings.value("files/last_dir", docs if os.path.isdir(docs) else os.path.expanduser("~"))
+        return self.settings.value("files/last_dir", compat.documents_dir())
 
     def _remember_dir(self, path: str) -> None:
         self.settings.setValue("files/last_dir", os.path.dirname(os.path.abspath(path)))
@@ -2743,7 +2829,7 @@ class MainWindow(QMainWindow):
         path = self._export_path("Exporter en PDF", "Document PDF (*.pdf)", ".pdf")
         if path:
             title = self.doc.properties.get("title") or self.doc_title()
-            self._run_export(lambda: export.export_pdf(self.doc.pages, path, title), path)
+            self._run_export(lambda: export.export_pdf(self.doc.printable_pages(), path, title), path)
 
     def export_image(self, kind: str) -> None:
         sc = self.scene()
@@ -2763,6 +2849,12 @@ class MainWindow(QMainWindow):
         path = self._export_path("Exporter en SVG", "Image SVG (*.svg)", ".svg")
         if path:
             self._run_export(lambda: export.export_svg(sc, path, "page"), path)
+
+    def export_html(self) -> None:
+        path = self._export_path("Enregistrer comme page web", "Page web (*.html *.htm)", ".html")
+        if path:
+            title = self.doc.properties.get("title") or self.doc_title()
+            self._run_export(lambda: export.export_html(self.doc.printable_pages(), path, title), path)
 
     def export_vsdx(self) -> None:
         path = self._export_path("Exporter au format Visio", VSDX_FILTER, ".vsdx")
@@ -2798,6 +2890,7 @@ class MainWindow(QMainWindow):
             values = dlg.values()
             if values != self.doc.properties:
                 self.doc.properties = values
+                self.doc.refresh_fields()
                 self.doc.undo_stack.resetClean()
                 self._update_title()
 
@@ -2810,8 +2903,8 @@ class MainWindow(QMainWindow):
 
     def about(self) -> None:
         QMessageBox.about(self, f"À propos de {APP_NAME}",
-                          f"<h3>{APP_NAME} {__version__}</h3><p>Éditeur de diagrammes libre et natif pour "
-                          "Linux, compatible avec les fichiers .vsdx, sans macros ni connexion réseau.</p>"
+                          f"<h3>{APP_NAME} {__version__}</h3><p>Éditeur de diagrammes libre pour Linux, "
+                          "Windows et macOS, compatible avec les fichiers .vsdx, sans macros ni connexion réseau.</p>"
                           "<p>© 2026 Joss943 et les contributeurs — licence MIT.<br>"
                           "Interface Qt 6 via PyQt6 (GPL v3).</p>"
                           "<p><small>Projet indépendant, non affilié à Microsoft, ni approuvé ou soutenu "

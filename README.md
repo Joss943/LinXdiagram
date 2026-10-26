@@ -1,10 +1,11 @@
 # LinXdiagram
 
-Éditeur de diagrammes **libre et natif pour Linux**, à l'ergonomie familière pour les
+Éditeur de diagrammes **libre pour Linux, Windows et macOS**, à l'ergonomie familière pour les
 habitués de Microsoft Visio : ruban, gabarits de formes, connecteurs dynamiques, connexion
 automatique, repères d'alignement… et **compatible avec les fichiers `.vsdx`**.
 
-Application Qt 6 (PyQt6), intégrée au bureau (GNOME, KDE, Wayland et X11).
+Application Qt 6 (PyQt6), intégrée au bureau : GNOME et KDE (Wayland et X11), Windows 10/11
+et macOS 11 ou plus récent (barre de titre native, ouverture des fichiers depuis le Finder).
 Site du projet : <https://joss943.github.io/LinXdiagram/>
 
 > Projet indépendant, **non affilié à Microsoft**, ni approuvé ou soutenu par Microsoft.
@@ -24,6 +25,24 @@ Site du projet : <https://joss943.github.io/LinXdiagram/>
 Dépendances : Python ≥ 3.11 et PyQt6 (`sudo dnf install python3-pyqt6` sur Fedora,
 `sudo apt install python3-pyqt6 python3-pyqt6.qtsvg` sur Debian/Ubuntu). La police
 Carlito (métriquement identique à Calibri) est utilisée si elle est installée.
+
+### Windows et macOS
+
+Des paquets prêts à l'emploi sont publiés à chaque version (onglet *Releases* de GitHub) :
+installateur Windows (`.exe`, sans droits administrateur, associations `.lxd` et `.vsdx`),
+version portable `.zip`, et image disque macOS (`.dmg`, Apple Silicon et Intel).
+
+Depuis les sources :
+
+```bash
+python -m pip install PyQt6 cryptography
+python -m linxdiagram          # ou run.bat (Windows), run.command (macOS)
+```
+
+`pip install .` installe aussi la commande `linxdiagram`. Les dossiers de l'application suivent
+chaque système : `~/.local/share` (Linux), `%LOCALAPPDATA%\LinXdiagram` (Windows),
+`~/Library/Application Support/LinXdiagram` (macOS). La variable `LINXDIAGRAM_HOME` les
+regroupe dans un seul dossier (version portable sur clé USB).
 
 ## Une interface familière
 
@@ -61,15 +80,15 @@ Carlito (métriquement identique à Calibri) est utilisée si elle est installé
 
 | Onglet | Fonctions |
 |---|---|
-| Accueil | Coller, couper, copier, reproduire la mise en forme ; police, taille, A⁺/A⁻, effacer la mise en forme, gras, italique, souligné, barré, casse ; alignements ; Pointeur, Connecteur, Texte, outils de dessin dont **Stylo à main levée** (Ctrl+7) ; **Styles rapides** (35 styles), Remplissage, Trait (couleur, épaisseur, tirets, flèches), Effets (ombre, lumière, dégradé) ; Aligner, Position, Premier plan, Arrière-plan, Grouper ; **Modifier la forme**, Calques, Sélectionner par type, Rechercher / Remplacer |
-| Insertion | Page vierge, dupliquer, renommer, supprimer ; Images ; Conteneur, Légende, Connecteur ; Lien (web ou page du document) ; Zone de texte, Info-bulle d'écran, Symbole |
+| Accueil | **Espacement automatique** (Position), coller, couper, copier, reproduire la mise en forme ; police, taille, A⁺/A⁻, effacer la mise en forme, gras, italique, souligné, barré, casse ; alignements ; Pointeur, Connecteur, Texte, outils de dessin dont **Stylo à main levée** (Ctrl+7) ; **Styles rapides** (35 styles), Remplissage, Trait (couleur, épaisseur, tirets, flèches), Effets (ombre, lumière, dégradé) ; Aligner, Position, Premier plan, Arrière-plan, Grouper ; **Modifier la forme**, Calques, Sélectionner par type, Rechercher / Remplacer |
+| Insertion | Page vierge, **page d'arrière-plan**, dupliquer, renommer, supprimer ; Images ; Conteneur, Légende, Connecteur ; Lien (web ou page du document) ; Zone de texte, Info-bulle d'écran, Symbole, **Champ** (numéro de page, nombre de pages, nom de la page, date, heure, titre, auteur, nom du fichier, donnée de forme) |
 | Création | Orientation, Taille, **Taille automatique**, Mise en page ; **Thèmes** et **Variantes** ; Arrière-plans, **Bordures et titres** ; **Redisposer la page**, Connecteurs, **sauts de ligne** |
 | Données | **Créer à partir de données** (organigramme ou diagramme de flux depuis un CSV), lier chaque forme à plusieurs fichiers CSV locaux par clé et actualiser toutes les sources à la demande, noms de colonnes préfixés automatiquement en cas de conflit, **graphiques de données** (étiquette et valeur, valeur seule ou pastille de statut avec couleurs configurables), fenêtre Données de forme, **Rapports de forme** (CSV). À l’export VSDX, les graphiques deviennent des annotations vectorielles statiques et séparables dans Visio ; les métadonnées LinXdiagram rétablissent leur association et leurs règles de couleur au réimport. |
 | Processus | **Sous-processus** à partir de la sélection, **Vérifier le diagramme**, fenêtre Problèmes |
 | Diagramme de flux interfonctionnel (contextuel) | Couloir (avant / après), Séparateur, nouveau diagramme horizontal ou vertical, Disposer les couloirs, Orientation du diagramme, Faire pivoter les étiquettes, Styles, Barre de titre, Séparateurs |
 | Révision | **Commentaires** (nouveau, précédent, suivant, supprimer, volet), **verrouiller les formes**, protéger le document |
 | Affichage | **Plein écran** (présentation page par page), règle, grille, grille dynamique, AutoConnect, points de connexion, magnétisme, Zoom, Ajuster à la fenêtre, Largeur de page, Nouvelle fenêtre, Volets des tâches |
-| Développeur | ShapeSheet, import / export .vsdx, propriétés du document |
+| Développeur | ShapeSheet, **Opérations** sur les formes (Union, Combiner, Fragmenter, Intersection, Soustraire), import / export .vsdx, propriétés du document |
 
 ### Diagrammes de flux interfonctionnels (couloirs)
 
@@ -106,7 +125,17 @@ collage dynamique ou statique des connecteurs, saisie directe du texte, poignée
 grille dynamique, annulation illimitée, raccourcis clavier de Visio (Ctrl+1/2/3, Ctrl+Maj+F/B,
 Ctrl+Maj+G/U, Ctrl+R/L, Ctrl+H/J, F5…).
 
-Exports : PDF (multipage, vectoriel), PNG, JPEG, SVG, `.vsdx` ; impression avec aperçu.
+Exports : PDF (multipage, vectoriel), PNG, JPEG, SVG, **page web HTML** (toutes les pages, sans
+script), `.vsdx` ; impression avec aperçu.
+
+### Pages d'arrière-plan et champs
+
+Comme dans Visio, une **page d'arrière-plan** (Insertion > Page vierge > Page d'arrière-plan, ou
+Mise en page > Type) affiche ses formes sous celles des pages qui l'utilisent : cartouche, logo,
+pied de page. Elle n'est ni imprimée ni exportée seule, suit les renommages et les boucles sont
+refusées. Les **champs** `{{Page}}`, `{{Pages}}`, `{{Date}}`, `{{Titre}}`… s'affichent avec leur
+valeur ; posés sur un arrière-plan, ils prennent le numéro de la page de premier plan. Les deux
+sont conservés à l'export `.vsdx` (attributs `Background` / `BackPage`) et relus à l'import.
 
 ## Compatibilité Visio (.vsdx)
 
@@ -188,6 +217,10 @@ des connecteurs, la disposition automatique, l'import/export Visio et l'interfac
   association `.vsdx`).
 * `packaging/rpm/linxdiagram.spec` : paquet RPM pour Fedora.
 * `packaging/flatpak/` : manifeste Flatpak (runtime KDE + PyQt BaseApp).
+* `pyproject.toml` : installation par `pip` sur les trois systèmes.
+* `packaging/pyinstaller/` : application autonome Windows (`LinXdiagram.exe`) et macOS
+  (`LinXdiagram.app`, types de documents déclarés) ; `packaging/windows/linxdiagram.iss` :
+  installateur Inno Setup. Le workflow `release.yml` les construit à chaque étiquette `v*`.
 
 ## Organisation du code
 
@@ -200,7 +233,9 @@ des connecteurs, la disposition automatique, l'import/export Visio et l'interfac
 | `routing.py`, `layout.py` | Routage des connecteurs, disposition automatique |
 | `commands.py`, `document.py` | Annulation/rétablissement, pages, document |
 | `fileformat.py`, `security.py` | Format `.lxd` validé, chiffrement, fichiers |
+| `compat.py` | Différences Linux / Windows / macOS (dossiers, processus, polices) |
+| `fields.py` | Champs de texte (numéro de page, date, propriétés…) |
 | `vsdx.py` | Import/export Microsoft Visio |
-| `export.py` | PDF, PNG, JPEG, SVG, impression |
+| `export.py` | PDF, PNG, JPEG, SVG, page web, impression |
 | `mainwindow.py`, `panes.py`, `canvas.py`, `backstage.py`, `widgets.py`, `dialogs.py`, `presentation.py` | Interface |
 | `quickstyles.py`, `datavis.py`, `swimlanes.py` | Styles rapides et variantes, création à partir de données, couloirs |

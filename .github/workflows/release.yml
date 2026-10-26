@@ -1,0 +1,72 @@
+name: Paquets Windows et macOS
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows-x64
+          - os: macos-latest
+            name: macos-arm64
+          - os: macos-13
+            name: macos-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Dépendances
+        run: pip install PyQt6 cryptography pyinstaller
+      - name: Version
+        id: v
+        shell: bash
+        run: echo "version=$(python -c 'import linxdiagram; print(linxdiagram.__version__)')" >> "$GITHUB_OUTPUT"
+      - name: Icônes
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python packaging/make_icons.py build/icons
+      - name: Icône macOS
+        if: runner.os == 'macOS'
+        run: iconutil -c icns build/icons/LinXdiagram.iconset -o build/icons/LinXdiagram.icns
+      - name: PyInstaller
+        run: pyinstaller --noconfirm --distpath dist --workpath build/pyinstaller packaging/pyinstaller/linxdiagram.spec
+      - name: Installateur Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\iscc.exe" "/DAppVersion=${{ steps.v.outputs.version }}" packaging\windows\linxdiagram.iss
+          Compress-Archive -Path dist\LinXdiagram -DestinationPath "dist\LinXdiagram-${{ steps.v.outputs.version }}-windows-x64-portable.zip"
+      - name: Image disque macOS
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p build/dmg
+          cp -R dist/LinXdiagram.app build/dmg/
+          ln -s /Applications build/dmg/Applications
+          hdiutil create -volname LinXdiagram -srcfolder build/dmg -ov -format UDZO \
+            "dist/LinXdiagram-${{ steps.v.outputs.version }}-${{ matrix.name }}.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LinXdiagram-${{ matrix.name }}
+          path: |
+            dist/*.exe
+            dist/*.zip
+            dist/*.dmg
+      - name: Publication
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.exe
+            dist/*.zip
+            dist/*.dmg

@@ -45,6 +45,12 @@
   </categories>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.1.0" date="2026-10-26">
+      <description>
+        <p>Windows et macOS, opérations sur les formes, pages d'arrière-plan, champs,
+        espacement automatique et export en page web.</p>
+      </description>
+    </release>
     <release version="1.0.0" date="2026-10-23"/>
   </releases>
 </component>

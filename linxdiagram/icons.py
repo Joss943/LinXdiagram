@@ -685,6 +685,81 @@ def _page_del(c):
     _x_badge(c, 23, 23)
 
 
+@_reg("page_background")
+def _page_background(c):
+    _page(c, 9, 2, 18, 22, 5, fill=BLUE_L)
+    _page(c, 4, 8, 18, 22, 5)
+
+
+def _op_pair():
+    a = QPainterPath()
+    a.addRect(QRectF(4.5, 6.5, 15, 15))
+    b = QPainterPath()
+    b.addEllipse(QPointF(20, 18), 8, 8)
+    return a, b
+
+
+@_reg("shape_union", "shape_ops")
+def _shape_union(c):
+    a, b = _op_pair()
+    c.path(a.united(b), fill=BLUE_L, stroke=BLUE)
+
+
+@_reg("shape_combine")
+def _shape_combine(c):
+    a, b = _op_pair()
+    p = QPainterPath(a)
+    p.addPath(b)
+    p.setFillRule(Qt.FillRule.OddEvenFill)
+    c.path(p, fill=BLUE_L, stroke=BLUE)
+
+
+@_reg("shape_fragment")
+def _shape_fragment(c):
+    a, b = _op_pair()
+    c.path(a.subtracted(b), fill=BLUE_L, stroke=BLUE)
+    c.path(a.intersected(b), fill=ORANGE_L, stroke=ORANGE)
+    c.path(b.subtracted(a), fill=YELLOW_L, stroke=YELLOW)
+
+
+@_reg("shape_intersect")
+def _shape_intersect(c):
+    a, b = _op_pair()
+    c.path(a, stroke=INK2)
+    c.path(b, stroke=INK2)
+    c.path(a.intersected(b), fill=BLUE_L, stroke=BLUE)
+
+
+@_reg("shape_subtract")
+def _shape_subtract(c):
+    a, b = _op_pair()
+    c.path(b.subtracted(a), stroke=INK2)
+    c.path(a.subtracted(b), fill=BLUE_L, stroke=BLUE)
+
+
+@_reg("field")
+def _field(c):
+    c.rect(3, 8, 26, 16, fill=PAPER, stroke=INK)
+    c.text(3, 8, 26, 16, "{ }", 11, bold=True, color=BLUE)
+
+
+@_reg("auto_space")
+def _auto_space(c):
+    for x in (3, 13, 23):
+        c.rect(x, 9, 6, 6, fill=BLUE_L, stroke=BLUE)
+    c.line(9, 12, 13, 12, INK).line(19, 12, 23, 12, INK)
+    c.line(3, 24, 29, 24, INK2)
+    c.head((29, 24), (1, 0), 3, INK2)
+
+
+@_reg("export_html")
+def _export_html(c):
+    c.rect(3, 5, 26, 22, fill=PAPER, stroke=INK)
+    c.rect(3, 5, 26, 5, fill=BLUE_L, stroke=INK)
+    c.ellipse(16, 19, 5, fill=None, stroke=BLUE)
+    c.line(11, 19, 21, 19, BLUE).line(16, 14, 16, 24, BLUE)
+
+
 @_reg("page_rename", "edit_text")
 def _page_rename(c):
     _page(c, 4, 3, 18, 25)
