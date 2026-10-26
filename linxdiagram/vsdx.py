@@ -31,7 +31,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPainterPath
 
 from . import APP_NAME, __version__, fields, fileformat, security, stencils, swimlanes
-from .units import PX_PER_INCH
+from .units import INDENT_PX, PX_PER_INCH
 
 VNS = "http://schemas.microsoft.com/office/visio/2012/main"
 RNS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -801,11 +801,22 @@ class _Importer:
             "bold": bool(style_bits & 1), "italic": bool(style_bits & 2),
             "underline": bool(style_bits & 4),
             "color": _color(sheet.row_cell("Character", "Color")) or "#000000",
-            "halign": ("left", "center", "right", "center")[min(max(halign, 0), 3)],
+            "halign": ("left", "center", "right", "justify")[min(max(halign, 0), 3)],
             "valign": ("top", "middle", "bottom")[min(max(valign, 0), 2)],
         }
         if font:
             out["font"] = font
+        bullet = int(_num(sheet.row_cell("Paragraph", "Bullet"), 0) or 0)
+        if bullet:
+            out["bullets"] = True
+        ind_left = _num(sheet.row_cell("Paragraph", "IndLeft"), 0.0) or 0.0
+        if bullet:
+            ind_left -= 0.25
+        if ind_left > 0.01:
+            out["indent"] = min(fileformat.MAX_INDENT, round(ind_left * PX_PER_INCH / INDENT_PX))
+        sp = _num(sheet.row_cell("Paragraph", "SpLine"), None)
+        if sp is not None and sp < 0:
+            out["spacing"] = min(3.0, max(0.5, -sp))
         return out
 
     def _line_style(self, sheet: _Sheet) -> dict:
@@ -1149,7 +1160,18 @@ def _text_cells(shape_el, ts: dict, fonts: dict) -> None:
     _cell(row, "Size", ts["size"] / 72.0, "PT")
     sec = _el(shape_el, "Section", N="Paragraph")
     row = _el(sec, "Row", IX="0")
-    _cell(row, "HorzAlign", {"left": 0, "center": 1, "right": 2}[ts["halign"]])
+    _cell(row, "HorzAlign", {"left": 0, "center": 1, "right": 2, "justify": 3}[ts["halign"]])
+    # Retrait (pouces), interligne en pourcentage (valeur négative dans Visio) et puces.
+    # Une puce ajoute, comme dans Visio, un retrait suspendu de 0,25 pouce.
+    ind_left = ts.get("indent", 0) * INDENT_PX / PX_PER_INCH + (0.25 if ts.get("bullets") else 0.0)
+    if ind_left:
+        _cell(row, "IndLeft", ind_left, "IN")
+    if abs(ts.get("spacing", 1.0) - 1.0) > 1e-6:
+        _cell(row, "SpLine", -ts["spacing"])
+    if ts.get("bullets"):
+        _cell(row, "Bullet", 1)
+        _cell(row, "BulletStr", "•", "STR")
+        _cell(row, "IndFirst", -0.25, "IN")
 
 
 def _data_sections(shape_el, data: dict, link: str, type_id: str | None, container: bool = False,

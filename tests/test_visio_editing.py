@@ -123,6 +123,63 @@ class VisioEditingTest(unittest.TestCase):
         self.w._fill_switch_menu()
         self.assertEqual(len(self.w.switch_menu.actions()), 2)
 
+    def test_paragraph_bullets_indent_spacing(self):
+        a = self.sc.add_shape("basic.rectangle", QPointF(200, 200))
+        a.text = "Un\nDeux"
+        a.layout_label()
+        self.sc.select_items([a])
+        self.w.a["bullets"].trigger()
+        self.assertTrue(a.text_style["bullets"])
+        self.assertIsNotNone(a.label.document().firstBlock().textList())
+        self.w.a["indent_more"].trigger()
+        self.w.a["indent_more"].trigger()
+        self.assertEqual(a.text_style["indent"], 2)
+        self.w._text_style({"spacing": 1.5})
+        fmt = a.label.document().firstBlock().blockFormat()
+        self.assertAlmostEqual(fmt.lineHeight(), 150)
+        self.assertEqual(a.label.toPlainText(), "Un\nDeux")  # les puces ne s'ajoutent pas au texte
+        self.w.a["bullets"].trigger()
+        self.assertIsNone(a.label.document().firstBlock().textList())
+        self.w.a["indent_less"].trigger()
+        self.assertEqual(a.text_style["indent"], 1)
+
+    def test_paragraphs_and_justify_survive_vsdx(self):
+        import os
+        import tempfile
+        from linxdiagram import vsdx
+        a = self.sc.add_shape("basic.rectangle", QPointF(200, 200))
+        self.sc.select_items([a])
+        self.w._text_style({"halign": "justify", "bullets": True, "indent": 2, "spacing": 1.5})
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "p.vsdx")
+            vsdx.export_vsdx(self.w.doc, path)
+            data, _w = vsdx.import_vsdx(path)
+        ts = data["pages"][0]["shapes"][0]["text_style"]
+        self.assertEqual(ts["halign"], "justify")
+        self.assertTrue(ts["bullets"])
+        self.assertEqual(ts["indent"], 2)
+        self.assertAlmostEqual(ts["spacing"], 1.5)
+
+    def test_reorder_pages_by_tab_drag_and_undo(self):
+        self.w.add_page()
+        self.w.add_page()
+        names = [p.page_name for p in self.w.doc.pages]
+        self.w.page_tabs.moveTab(0, 2)  # même signal que le glisser d'un onglet
+        self.app.processEvents()
+        self.assertEqual([p.page_name for p in self.w.doc.pages], names[1:] + names[:1])
+        self.assertEqual([self.w.page_tabs.tabText(i) for i in range(3)], names[1:] + names[:1])
+        self.w.doc.undo_stack.undo()
+        self.assertEqual([p.page_name for p in self.w.doc.pages], names)
+
+    def test_reorder_pages_dialog(self):
+        from linxdiagram.dialogs import ReorderPagesDialog
+        self.w.add_page()
+        pages = list(self.w.doc.pages)
+        dlg = ReorderPagesDialog(self.w, pages)
+        dlg.list.setCurrentRow(1)
+        dlg.move(-1)
+        self.assertEqual(dlg.order(), [pages[1], pages[0]])
+
 
 if __name__ == "__main__":
     unittest.main()

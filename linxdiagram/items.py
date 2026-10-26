@@ -16,7 +16,8 @@ import math
 from PyQt6.QtCore import QBuffer, QByteArray, QIODevice, QLineF, QPointF, QRectF, Qt
 from PyQt6.QtGui import (QBrush, QColor, QFont, QImageReader, QKeySequence, QLinearGradient,
                          QFontMetricsF, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap,
-                         QPolygonF, QTextDocument, QTextOption, QTransform)
+                         QPolygonF, QTextBlockFormat, QTextCursor, QTextDocument, QTextListFormat,
+                         QTextOption, QTransform)
 from PyQt6.QtWidgets import (QApplication, QGraphicsItem, QGraphicsTextItem, QMenu,
                              QStyleOptionGraphicsItem)
 
@@ -24,7 +25,7 @@ from . import fields, security, stencils
 from .fileformat import MAX_TEXT, clean_data_links, normalize_status_key
 from .routing import axis_direction, curve_controls, route_orthogonal
 from .swimlanes import HEADER as CFF_HEADER, PHASE as CFF_PHASE, TITLE as CFF_TITLE
-from .units import GRID_PX, MIN_SIZE_PX, mm_to_px
+from .units import GRID_PX, INDENT_PX, MIN_SIZE_PX, mm_to_px
 
 ACCENT = QColor("#2563eb")
 GLUE = QColor("#16a34a")
@@ -110,7 +111,7 @@ class TextLabel(QGraphicsTextItem):
         self.document().contentsChanged.connect(self._changed)
 
     def _changed(self) -> None:
-        if self.owner.editing:
+        if self.owner.editing and not self.owner._formatting:
             self.owner.layout_label()
 
     def keyPressEvent(self, event):  # noqa: N802
@@ -171,6 +172,7 @@ class TextOwner(QGraphicsItem):
         self.editing = False
         self._edit_before: dict | None = None
         self._applying = False
+        self._formatting = False  # mise en forme des paragraphes en cours (évite la récursion)
         self.label = TextLabel(self)
 
     def state(self) -> dict:  # pragma: no cover - surchargé
@@ -192,6 +194,38 @@ class TextOwner(QGraphicsItem):
         opt.setAlignment(_HALIGN[ts["halign"]])
         opt.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
         doc.setDefaultTextOption(opt)
+        self._apply_paragraphs(doc, ts)
+
+    def _apply_paragraphs(self, doc, ts: dict) -> None:
+        """Puces, retrait et interligne (Accueil > Paragraphe de Visio) sur tous les paragraphes."""
+        bullets = bool(ts.get("bullets"))
+        indent = int(ts.get("indent", 0)) * INDENT_PX
+        spacing = float(ts.get("spacing", 1.0))
+        first = doc.firstBlock()
+        fmt0 = first.blockFormat()
+        same_spacing = (abs(fmt0.lineHeight() - spacing * 100) < 0.01 if abs(spacing - 1.0) > 1e-6
+                        else fmt0.lineHeightType() == 0)
+        if ((first.textList() is not None) == bullets and abs(fmt0.leftMargin() - indent) < 0.01
+                and same_spacing):
+            return
+        self._formatting = True
+        try:
+            cur = QTextCursor(doc)
+            cur.beginEditBlock()
+            cur.select(QTextCursor.SelectionType.Document)
+            bf = QTextBlockFormat()
+            bf.setLeftMargin(indent)
+            if abs(spacing - 1.0) > 1e-6:
+                bf.setLineHeight(spacing * 100, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+            cur.setBlockFormat(bf)
+            if bullets:
+                lf = QTextListFormat()
+                lf.setStyle(QTextListFormat.Style.ListDisc)
+                lf.setIndent(1)
+                cur.createList(lf)
+            cur.endEditBlock()
+        finally:
+            self._formatting = False
 
     def display_text(self) -> str:
         """Texte affiché : les champs ({{page}}, {{date}}…) sont remplacés par leur valeur."""

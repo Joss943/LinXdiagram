@@ -40,6 +40,7 @@ MAX_DATA_FIELDS = 100
 MAX_DATA_LINKS_PER_SHAPE = 10
 MAX_IMAGE_BYTES = 16 * 1024 * 1024
 MAX_PATH_COMMANDS = 20_000
+MAX_INDENT = 8
 
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
@@ -131,6 +132,9 @@ def clean_text_style(raw, base: dict) -> dict:
         "color": _color(raw.get("color"), base["color"], allow_none=False),
         "halign": _choice(raw.get("halign"), HALIGNS, base["halign"]),
         "valign": _choice(raw.get("valign"), VALIGNS, base["valign"]),
+        "bullets": _bool(raw.get("bullets"), base.get("bullets", False)),
+        "indent": _int(raw.get("indent"), 0, MAX_INDENT, base.get("indent", 0)),
+        "spacing": _num(raw.get("spacing"), 0.5, 3.0, base.get("spacing", 1.0)),
     }
 
 

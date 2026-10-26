@@ -473,6 +473,44 @@ def _buttons(dlg, ok_text: str = "OK") -> QDialogButtonBox:
     return b
 
 
+class ReorderPagesDialog(QDialog):
+    """« Réorganiser les pages » de Visio : glisser les pages ou utiliser Monter / Descendre."""
+
+    def __init__(self, parent, pages):
+        super().__init__(parent)
+        self.setWindowTitle("Réorganiser les pages")
+        self._pages = list(pages)
+        lay = QHBoxLayout(self)
+        self.list = QListWidget()
+        self.list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        for i, p in enumerate(self._pages):
+            it = QListWidgetItem(p.page_name)
+            it.setData(Qt.ItemDataRole.UserRole, i)
+            self.list.addItem(it)
+        self.list.setCurrentRow(0)
+        lay.addWidget(self.list)
+        side = QVBoxLayout()
+        for text, step in (("Monter", -1), ("Descendre", 1)):
+            b = QPushButton(text)
+            b.clicked.connect(lambda _=False, d=step: self.move(d))
+            side.addWidget(b)
+        side.addStretch(1)
+        side.addWidget(_buttons(self))
+        lay.addLayout(side)
+
+    def move(self, step: int) -> None:
+        row = self.list.currentRow()
+        dst = row + step
+        if row < 0 or not 0 <= dst < self.list.count():
+            return
+        it = self.list.takeItem(row)
+        self.list.insertItem(dst, it)
+        self.list.setCurrentRow(dst)
+
+    def order(self) -> list:
+        return [self._pages[self.list.item(i).data(Qt.ItemDataRole.UserRole)] for i in range(self.list.count())]
+
+
 class ZoomDialog(QDialog):
     PRESETS = ((4.0, "400 %"), (2.0, "200 %"), (1.5, "150 %"), (1.0, "100 %"), (0.75, "75 %"),
                (0.5, "50 %"), ("page", "Page entière"), ("width", "Largeur de page"))

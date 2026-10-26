@@ -23,10 +23,10 @@ from . import (APP_NAME, __version__, FILE_EXT, compat, datavis, export, filefor
                security, favorites, fields, shapeops, spellcheck, stencils, swimlanes, templates, vsdx)
 from .backstage import Backstage
 from .canvas import CanvasArea
-from .commands import DocSettingsCommand, PageCommand
+from .commands import DocSettingsCommand, PageCommand, ReorderPagesCommand
 from .dialogs import (DataGraphicDialog, DataImportDialog, DataLinkDialog, FindReplaceDialog,
                       ImageExportDialog, LayersDialog, OptionsDialog, PageSetupDialog, PasswordDialog, PropertiesDialog,
-                      ShapeSheetDialog, ShortcutsDialog, ZoomDialog, FieldDialog, SpellDialog)
+                      ReorderPagesDialog, ShapeSheetDialog, ShortcutsDialog, ZoomDialog, FieldDialog, SpellDialog)
 from .document import Document
 from .items import ConnectorItem, ShapeItem, decode_image
 from .panes import (CommentsPane, DrawingExplorerPane, FormatPane, IssuesPane, PanZoomPane,
@@ -284,6 +284,10 @@ class MainWindow(QMainWindow):
                               ("justify", "Justifier", "Ctrl+Shift+J")):
             A(f"halign_{key}", text, "justify" if key == "justify" else f"align_text_{key}", sc,
               lambda k=key: self._text_style({"halign": k}))
+        A("bullets", "Puces", "bullets", None, lambda on: self._text_style({"bullets": on}), checkable=True,
+          tip="Ajoute ou retire les puces des paragraphes du texte.")
+        A("indent_more", "Augmenter le retrait", "indent_more", None, lambda: self._indent_step(1))
+        A("indent_less", "Diminuer le retrait", "indent_less", None, lambda: self._indent_step(-1))
         for key, text, sc in (("top", "Aligner en haut", "Ctrl+Shift+T"),
                               ("middle", "Aligner au milieu", "Ctrl+Shift+M"),
                               ("bottom", "Aligner en bas", "Ctrl+Shift+V")):
@@ -564,7 +568,8 @@ class MainWindow(QMainWindow):
         self.page_tabs.setDocumentMode(True)
         self.page_tabs.setExpanding(False)
         self.page_tabs.setDrawBase(False)
-        self.page_tabs.setMovable(False)
+        self.page_tabs.setMovable(True)  # glisser un onglet réordonne les pages, comme Visio
+        self.page_tabs.tabMoved.connect(self._page_tab_moved)
         self.page_tabs.currentChanged.connect(self._page_tab_changed)
         self.page_tabs.tabBarDoubleClicked.connect(lambda _i: self.rename_page())
         self.page_tabs.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -666,8 +671,18 @@ class MainWindow(QMainWindow):
         home.addWidget(g)
 
         g = RibbonGroup("Paragraphe", self.show_text_format, "Paragraphe")
-        g.column(g.row(a["valign_top"], a["valign_middle"], a["valign_bottom"]),
-                 g.row(a["halign_left"], a["halign_center"], a["halign_right"], a["halign_justify"]))
+        spacing = QMenu(self)
+        for v in (1.0, 1.15, 1.5, 2.0, 2.5, 3.0):
+            act = spacing.addAction(f"{v:g}".replace(".", ","))
+            act.setCheckable(True)
+            act.setData(v)
+            act.triggered.connect(lambda _=False, x=v: self._text_style({"spacing": x}))
+        spacing.aboutToShow.connect(lambda m=spacing: self._check_spacing(m))
+        g.column(g.row(a["valign_top"], a["valign_middle"], a["valign_bottom"], a["bullets"],
+                       R(None, ICON, icon_name="line_spacing", menu=spacing,
+                         tooltip="<b>Interligne</b><br>Espace entre les lignes du texte.")),
+                 g.row(a["halign_left"], a["halign_center"], a["halign_right"], a["halign_justify"],
+                       a["indent_less"], a["indent_more"]))
         home.addWidget(g)
 
         g = RibbonGroup("Outils")
@@ -1248,13 +1263,16 @@ class MainWindow(QMainWindow):
                 p.autoconnectHover.connect(self._quick_shapes)
                 self._connected_scenes.add(id(p))
         self.page_tabs.blockSignals(True)
-        while self.page_tabs.count():
-            self.page_tabs.removeTab(0)
-        for p in doc.pages:
-            i = self.page_tabs.addTab(p.page_name)
-            if p.is_background:
-                self.page_tabs.setTabIcon(i, icons.icon("background_page"))
-                self.page_tabs.setTabToolTip(i, "Page d'arrière-plan")
+        names = [p.page_name for p in doc.pages]
+        if [self.page_tabs.tabText(i) for i in range(self.page_tabs.count())] != names:
+            # Reconstruits seulement s'ils diffèrent : un onglet en cours de glissement reste en place.
+            while self.page_tabs.count():
+                self.page_tabs.removeTab(0)
+            for p in doc.pages:
+                self.page_tabs.addTab(p.page_name)
+        for i, p in enumerate(doc.pages):
+            self.page_tabs.setTabIcon(i, icons.icon("background_page") if p.is_background else QIcon())
+            self.page_tabs.setTabToolTip(i, "Page d'arrière-plan" if p.is_background else "")
         cur = self.scene()
         if cur in doc.pages:
             self.page_tabs.setCurrentIndex(doc.pages.index(cur))
@@ -1458,7 +1476,7 @@ class MainWindow(QMainWindow):
                 self.font_combo.setCurrentFont(QFont(ts["font"]))
                 self.font_combo.blockSignals(False)
                 self.size_combo.setEditText(f"{ts['size']:g}")
-                for k in ("bold", "italic", "underline", "strike"):
+                for k in ("bold", "italic", "underline", "strike", "bullets"):
                     self.a[k].blockSignals(True)
                     self.a[k].setChecked(bool(ts.get(k)))
                     self.a[k].blockSignals(False)
@@ -1670,6 +1688,25 @@ class MainWindow(QMainWindow):
             return
         if 1 <= v <= 400:
             self._text_style({"size": v})
+
+    def _indent_step(self, direction: int) -> None:
+        """Augmente ou diminue le retrait de chaque objet sélectionné d'un niveau (0,25 pouce)."""
+        sc = self.scene()
+        sel = [i for i in (sc.selected_all() if sc else []) if not getattr(i, "locked", False)]
+        if not sel:
+            return
+
+        def step(_it, st):
+            st["text_style"]["indent"] = min(fileformat.MAX_INDENT,
+                                             max(0, int(st["text_style"].get("indent", 0)) + direction))
+        sc.modify(sel, step, "Augmenter le retrait" if direction > 0 else "Diminuer le retrait")
+
+    def _check_spacing(self, menu: QMenu) -> None:
+        sc = self.scene()
+        sel = sc.selected_all() if sc else []
+        cur = sel[0].text_style.get("spacing", 1.0) if sel else None
+        for act in menu.actions():
+            act.setChecked(cur is not None and abs(act.data() - cur) < 1e-6)
 
     def _font_step(self, direction: int) -> None:
         sc = self.scene()
@@ -2655,12 +2692,28 @@ class MainWindow(QMainWindow):
             act.setChecked(sc.is_background)
             act.blockSignals(False)
 
+    def _page_tab_moved(self, src: int, dst: int) -> None:
+        order = list(self.doc.pages)
+        if not (0 <= src < len(order) and 0 <= dst < len(order)):
+            return
+        order.insert(dst, order.pop(src))
+        self.doc.undo_stack.push(ReorderPagesCommand(self.doc, self.doc.pages, order))
+
+    def reorder_pages_dialog(self) -> None:
+        """« Réorganiser les pages » : liste à glisser ou boutons Monter / Descendre."""
+        dlg = ReorderPagesDialog(self, self.doc.pages)
+        if dlg.exec() == ReorderPagesDialog.DialogCode.Accepted:
+            order = dlg.order()
+            if order != self.doc.pages:
+                self.doc.undo_stack.push(ReorderPagesCommand(self.doc, self.doc.pages, order))
+
     def _page_menu(self, pos) -> None:
         idx = self.page_tabs.tabAt(pos)
         if idx >= 0:
             self.show_page(self.doc.pages[idx])
         self._update_page_type_actions()
-        m = self._menu(self.a["page_add"], self.a["page_dup"], self.a["page_rename"], self.a["page_del"], None,
+        m = self._menu(self.a["page_add"], self.a["page_dup"], self.a["page_rename"], self.a["page_del"],
+                       ("Réorganiser les pages…", "page_dup", self.reorder_pages_dialog), None,
                        self.a["page_background_new"], self.a["page_is_background"], self._backpage_menu(), None,
                        self.a["page_setup"])
         m.exec(self.page_tabs.mapToGlobal(pos))

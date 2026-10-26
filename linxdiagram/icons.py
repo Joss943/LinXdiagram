@@ -370,6 +370,31 @@ def _bullets(c):
 
 
 # =========================================================================== Outils
+def _text_lines(c, x0=12):
+    for y in (8, 13, 18, 23):
+        c.line(x0, y, 28, y, INK)
+
+
+@_reg("indent_more")
+def _indent_more(c):
+    _text_lines(c)
+    c.poly([(3, 11), (8, 15.5), (3, 20)], fill=BLUE, stroke=None)
+
+
+@_reg("indent_less")
+def _indent_less(c):
+    _text_lines(c)
+    c.poly([(8, 11), (3, 15.5), (8, 20)], fill=BLUE, stroke=None)
+
+
+@_reg("line_spacing")
+def _line_spacing(c):
+    _text_lines(c, 13)
+    c.line(6, 6, 6, 26, BLUE)
+    c.poly([(3, 9), (6, 5), (9, 9)], fill=BLUE, stroke=None)
+    c.poly([(3, 23), (6, 27), (9, 23)], fill=BLUE, stroke=None)
+
+
 @_reg("pointer", "tool_select")
 def _pointer(c):
     c.poly([(10, 3.5), (10, 25), (15, 20.5), (19, 28.5), (22.5, 27), (18.5, 19), (25, 19)],

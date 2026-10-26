@@ -65,6 +65,11 @@ class Document(QObject):
         self.pagesChanged.emit()
         self.show_page(scene)
 
+    def set_page_order(self, order: list) -> None:
+        if sorted(map(id, order)) == sorted(map(id, self.pages)) and order != self.pages:
+            self.pages[:] = order
+            self.pagesChanged.emit()
+
     def take_page(self, scene: DiagramScene) -> None:
         if scene in self.pages and len(self.pages) > 1:
             self.pages.remove(scene)
