@@ -22,9 +22,17 @@ import os
 import re
 import secrets
 import stat
+import sys
 import tempfile
 import unicodedata
 from urllib.parse import urlsplit
+
+
+# Drapeaux absents de certains systèmes (Windows n'a ni O_CLOEXEC ni O_NONBLOCK, mais
+# exige O_BINARY pour lire les octets tels quels).
+O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+O_BINARY = getattr(os, "O_BINARY", 0)
+_O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
 
 
 class SecurityError(Exception):
@@ -106,7 +114,7 @@ def read_file_limited(path: str, max_bytes: int) -> bytes:
     courses entre vérification et ouverture ; O_NONBLOCK empêche un FIFO de
     bloquer l'ouverture.
     """
-    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK | getattr(os, "O_NOCTTY", 0)
+    flags = os.O_RDONLY | O_CLOEXEC | O_BINARY | _O_NONBLOCK | getattr(os, "O_NOCTTY", 0)
     try:
         fd = os.open(path, flags)
     except OSError as exc:
@@ -119,7 +127,8 @@ def read_file_limited(path: str, max_bytes: int) -> bytes:
             raise SecurityError(
                 f"Fichier trop volumineux ({st.st_size // (1024 * 1024)} Mo, "
                 f"maximum {max_bytes // (1024 * 1024)} Mo).")
-        os.set_blocking(fd, True)
+        if _O_NONBLOCK:
+            os.set_blocking(fd, True)
         chunks: list[bytes] = []
         total = 0
         while True:
@@ -156,6 +165,8 @@ def _target_mode(path: str, private: bool) -> int:
 
 
 def _fsync_dir(directory: str) -> None:
+    if not hasattr(os, "O_DIRECTORY"):  # Windows : NTFS journalise le renommage
+        return
     try:
         dfd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
     except OSError:
@@ -218,7 +229,7 @@ def private_dir(path: str) -> str:
     st = os.lstat(path)
     if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
         raise SecurityError(f"{path} n'est pas un répertoire sûr.")
-    if st.st_uid != os.getuid():
+    if hasattr(os, "getuid") and st.st_uid != os.getuid():
         raise SecurityError(f"{path} appartient à un autre utilisateur.")
     if stat.S_IMODE(st.st_mode) & 0o077:
         os.chmod(path, 0o700)
@@ -243,16 +254,76 @@ _SCRYPT_P = 1
 _SCRYPT_MAXMEM = 320 * 1024 * 1024
 
 
+def _libcrypto_candidates() -> list[str]:
+    """Emplacements possibles de la libcrypto d'OpenSSL 3 selon le système.
+
+    Sous Windows, CPython et les roues PyQt6 livrent ``libcrypto-3*.dll`` ; sous macOS,
+    on n'utilise jamais ``/usr/lib/libcrypto.dylib`` (son chargement interrompt le processus).
+    """
+    out: list[str] = []
+    if sys.platform.startswith("win"):
+        names = ("libcrypto-3-x64.dll", "libcrypto-3-arm64.dll", "libcrypto-3.dll")
+        dirs = [os.path.join(sys.base_prefix, "DLLs"), os.path.dirname(sys.executable)]
+        try:
+            import PyQt6
+            dirs.append(os.path.join(os.path.dirname(PyQt6.__file__), "Qt6", "bin"))
+        except ImportError:
+            pass
+        out += [os.path.join(d, n) for d in dirs for n in names]
+        out += list(names)
+    elif sys.platform == "darwin":
+        name = "libcrypto.3.dylib"
+        dirs = [os.path.join(sys.base_prefix, "lib"), "/opt/homebrew/opt/openssl@3/lib",
+                "/usr/local/opt/openssl@3/lib", "/opt/local/lib"]
+        out += [os.path.join(d, name) for d in dirs]
+    else:
+        found = ctypes.util.find_library("crypto")
+        if found:
+            out.append(found)
+        out += ["libcrypto.so.3", "libcrypto.so"]
+    return out
+
+
+class _CryptographyGCM:
+    """AES-256-GCM via le paquet « cryptography » lorsqu'il est installé."""
+
+    def __init__(self) -> None:
+        from cryptography.exceptions import InvalidTag
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        self._aesgcm, self._invalid = AESGCM, InvalidTag
+
+    def encrypt(self, key: bytes, nonce: bytes, plaintext: bytes, aad: bytes) -> bytes:
+        return self._aesgcm(key).encrypt(nonce, plaintext, aad or None)
+
+    def decrypt(self, key: bytes, nonce: bytes, data: bytes, aad: bytes) -> bytes:
+        if len(data) < 16:
+            raise SecurityError("Données chiffrées tronquées.")
+        try:
+            return self._aesgcm(key).decrypt(nonce, data, aad or None)
+        except self._invalid as exc:
+            raise WrongPasswordError("Mot de passe incorrect, ou fichier modifié/corrompu.") from exc
+
+
 class _OpenSSLGCM:
-    """AES-256-GCM via la libcrypto d'OpenSSL (présente sur tout système Linux)."""
+    """AES-256-GCM via la libcrypto d'OpenSSL (Linux, Windows et macOS)."""
 
     _SET_IVLEN = 0x9
     _GET_TAG = 0x10
     _SET_TAG = 0x11
 
     def __init__(self) -> None:
-        name = ctypes.util.find_library("crypto") or "libcrypto.so.3"
-        lib = ctypes.CDLL(name)
+        lib = None
+        for name in _libcrypto_candidates():
+            if os.path.isabs(name) and not os.path.isfile(name):
+                continue
+            try:
+                lib = ctypes.CDLL(name)
+                lib.EVP_aes_256_gcm  # noqa: B018 - vérifie qu'il s'agit bien d'OpenSSL
+                break
+            except (OSError, AttributeError):
+                lib = None
+        if lib is None:
+            raise OSError("libcrypto introuvable")
         vp, ip, cp = ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p
         lib.EVP_CIPHER_CTX_new.restype = vp
         lib.EVP_CIPHER_CTX_new.argtypes = []
@@ -332,16 +403,20 @@ class _OpenSSLGCM:
             lib.EVP_CIPHER_CTX_free(ctx)
 
 
-_gcm: _OpenSSLGCM | None = None
+_gcm: _OpenSSLGCM | _CryptographyGCM | None = None
 
 
-def _cipher() -> _OpenSSLGCM:
+def _cipher() -> _OpenSSLGCM | _CryptographyGCM:
     global _gcm
     if _gcm is None:
         try:
             _gcm = _OpenSSLGCM()
-        except (OSError, AttributeError) as exc:
-            raise SecurityError("Le chiffrement nécessite OpenSSL (libcrypto).") from exc
+        except (OSError, AttributeError):
+            try:
+                _gcm = _CryptographyGCM()
+            except ImportError as exc:
+                raise SecurityError("Le chiffrement nécessite OpenSSL (libcrypto) ou le paquet "
+                                    "Python « cryptography ».") from exc
     return _gcm
 
 

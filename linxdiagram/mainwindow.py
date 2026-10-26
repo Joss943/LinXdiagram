@@ -10,8 +10,8 @@ import math
 import os
 import unicodedata
 
-from PyQt6.QtCore import (QBuffer, QIODevice, QMimeData, QPoint, QPointF, QRectF, QSize, Qt, QTimer,
-                          QUrl)
+from PyQt6.QtCore import (QBuffer, QEvent, QIODevice, QMimeData, QPoint, QPointF, QRect, QRectF, QSize, Qt,
+                          QTimer, QUrl)
 from PyQt6.QtGui import (QAction, QActionGroup, QColor, QDesktopServices, QFont, QIcon, QKeySequence,
                          QPainter, QPen, QPixmap)
 from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, QFileDialog,
@@ -19,14 +19,15 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, Q
                              QMainWindow, QMenu, QMessageBox, QSlider, QSplitter,
                              QStackedWidget, QTabBar, QToolButton, QVBoxLayout, QWidget, QWidgetAction)
 
-from . import (APP_NAME, __version__, FILE_EXT, datavis, export, fileformat, icons, quickstyles, security,
-               favorites, fields, shapeops, spellcheck, stencils, swimlanes, templates, vsdx)
+from . import (APP_NAME, __version__, FILE_EXT, compat, datavis, export, fileformat, icons, quickstyles,
+               security, favorites, fields, shapeops, spellcheck, stencils, swimlanes, templates, vsdx)
 from .backstage import Backstage
 from .canvas import CanvasArea
-from .commands import DocSettingsCommand, PageCommand
+from .commands import DocSettingsCommand, PageCommand, ReorderPagesCommand
 from .dialogs import (DataGraphicDialog, DataImportDialog, DataLinkDialog, FindReplaceDialog,
                       ImageExportDialog, LayersDialog, OptionsDialog, PageSetupDialog, PasswordDialog, PropertiesDialog,
-                      ShapeSheetDialog, ShortcutsDialog, ZoomDialog, FieldDialog, SpellDialog)
+                      ReorderPagesDialog, RulerGridDialog, ShapeSheetDialog, SnapGlueDialog, ShortcutsDialog,
+                      ZoomDialog, FieldDialog, SpellDialog)
 from .document import Document
 from .items import ConnectorItem, ShapeItem, decode_image
 from .panes import (CommentsPane, DrawingExplorerPane, FormatPane, IssuesPane, PanZoomPane,
@@ -123,6 +124,16 @@ def _data_link_field_map(shape: ShapeItem, path: str, headers: list[str], old_li
     return out
 
 
+def tile_rects(n: int, area: QRect) -> list[QRect]:
+    """Emplacements de « Réorganiser tout » : 1, 2 ou 3 colonnes selon le nombre de fenêtres."""
+    if n <= 0:
+        return []
+    cols = 1 if n == 1 else 2 if n <= 4 else 3
+    rows = -(-n // cols)
+    cw, ch = area.width() // cols, area.height() // rows
+    return [QRect(area.x() + (i % cols) * cw, area.y() + (i // cols) * ch, cw, ch) for i in range(n)]
+
+
 class MainWindow(QMainWindow):
     def __init__(self, ctx, doc: Document | None = None, title_hint: str | None = None):
         super().__init__()
@@ -135,7 +146,7 @@ class MainWindow(QMainWindow):
         self._updating_ui = False
         self._presentation = None
         self._paste_count = 0
-        self.native_frame = self.settings.value("ui/native_titlebar", False, type=bool)
+        self.native_frame = self.settings.value("ui/native_titlebar", compat.IS_MACOS, type=bool)
         if not self.native_frame:
             self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
             self.resizer = FramelessResizer(self)
@@ -225,6 +236,7 @@ class MainWindow(QMainWindow):
         A("export_png", "Exporter en PNG…", "png", None, lambda: self.export_image("png"))
         A("export_jpg", "Exporter en JPEG…", "image", None, lambda: self.export_image("jpg"))
         A("export_svg", "Exporter en SVG…", "svg", None, self.export_svg)
+        A("export_html", "Enregistrer comme page web…", "export_html", None, self.export_html)
         A("export_vsdx", "Exporter au format Visio…", "visio", None, self.export_vsdx,
           label="Exporter .vsdx")
         A("print", "Imprimer", "print", SK.Print, lambda: self.show_backstage("print"))
@@ -241,6 +253,8 @@ class MainWindow(QMainWindow):
         A("cut", "Couper", "cut", SK.Cut, self.cut)
         A("copy", "Copier", "copy", SK.Copy, self.copy)
         A("paste", "Coller", "paste", SK.Paste, self.paste)
+        A("paste_special", "Collage spécial…", "paste", "Ctrl+Alt+V", self.paste_special,
+          tip="Choisit le format à coller : formes, image ou texte sans mise en forme.")
         A("duplicate", "Dupliquer", "duplicate", "Ctrl+D", self.duplicate)
         A("delete", "Supprimer", "delete", [QKeySequence(Qt.Key.Key_Delete)], self.delete)
         A("select_all", "Tout sélectionner", "select_all", SK.SelectAll, self._sc(lambda s: s.select_all()))
@@ -260,7 +274,12 @@ class MainWindow(QMainWindow):
                 ("rectangle", "Rectangle", "rect_tool", "Ctrl+8", "Dessiner un rectangle."),
                 ("ellipse", "Ellipse", "ellipse_tool", "Ctrl+9", "Dessiner une ellipse."),
                 ("freeform", "Forme libre", "freeform", "Ctrl+5", "Dessiner une forme fermée à main levée."),
-                ("arc", "Arc", "arc", None, "Tracer un arc entre deux points.")):
+                ("arc", "Arc", "arc", None, "Tracer un arc entre deux points."),
+                ("port", "Point de connexion", "ports", "Ctrl+Shift+1",
+                 "Ctrl + clic sur une forme : ajouter un point. Clic : le sélectionner, puis le "
+                 "glisser ou le supprimer (Suppr)."),
+                ("textblock", "Bloc de texte", "text_block", "Ctrl+Shift+4",
+                 "Déplacer ou redimensionner la zone de texte d'une forme.")):
             act = A(f"tool_{key}", text, ic, sc, None, checkable=True, tip=tip,
                     label="Pointeur" if key == "select" else None)
             act.triggered.connect(lambda _=False, k=key: self.doc.set_tool(k))
@@ -281,6 +300,10 @@ class MainWindow(QMainWindow):
                               ("justify", "Justifier", "Ctrl+Shift+J")):
             A(f"halign_{key}", text, "justify" if key == "justify" else f"align_text_{key}", sc,
               lambda k=key: self._text_style({"halign": k}))
+        A("bullets", "Puces", "bullets", None, lambda on: self._text_style({"bullets": on}), checkable=True,
+          tip="Ajoute ou retire les puces des paragraphes du texte.")
+        A("indent_more", "Augmenter le retrait", "indent_more", None, lambda: self._indent_step(1))
+        A("indent_less", "Diminuer le retrait", "indent_less", None, lambda: self._indent_step(-1))
         for key, text, sc in (("top", "Aligner en haut", "Ctrl+Shift+T"),
                               ("middle", "Aligner au milieu", "Ctrl+Shift+M"),
                               ("bottom", "Aligner en bas", "Ctrl+Shift+V")):
@@ -419,6 +442,15 @@ class MainWindow(QMainWindow):
         A("presentation", "Plein écran", "presentation", "F5", self.start_presentation,
           tip="Affiche les pages en plein écran (flèches pour naviguer, Échap pour quitter).")
         A("rulers", "Règle", None, None, self.toggle_rulers, checkable=True)
+        A("page_breaks", "Sauts de page", None, None,
+          lambda on: self.doc.apply_settings({"page_breaks": on}), checkable=True,
+          tip="Montre où la page sera coupée à l'impression en taille réelle.")
+        A("ruler_guides", "Repères", None, None, self.toggle_ruler_guides, checkable=True,
+          tip="Affiche les repères tirés depuis les règles et l'accrochage à ces repères.")
+        A("arrange_all", "Réorganiser tout", "new_window", None, self.arrange_windows,
+          tip="Place toutes les fenêtres LinXdiagram côte à côte.")
+        A("cascade", "Cascade", "new_window", None, self.cascade_windows,
+          tip="Superpose les fenêtres en les décalant.")
         A("grid", "Grille", None, None, lambda on: self._view_setting("grid", on), checkable=True)
         A("guides", "Grille dynamique", None, None, lambda on: self._view_setting("guides", on), checkable=True)
         A("snap", "Magnétisme", None, None, lambda on: self._view_setting("snap", on), checkable=True)
@@ -555,7 +587,8 @@ class MainWindow(QMainWindow):
         self.page_tabs.setDocumentMode(True)
         self.page_tabs.setExpanding(False)
         self.page_tabs.setDrawBase(False)
-        self.page_tabs.setMovable(False)
+        self.page_tabs.setMovable(True)  # glisser un onglet réordonne les pages, comme Visio
+        self.page_tabs.tabMoved.connect(self._page_tab_moved)
         self.page_tabs.currentChanged.connect(self._page_tab_changed)
         self.page_tabs.tabBarDoubleClicked.connect(lambda _i: self.rename_page())
         self.page_tabs.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -617,8 +650,11 @@ class MainWindow(QMainWindow):
         # ======================================================= Accueil
         home = self.ribbon.add_page("Accueil")
         g = RibbonGroup("Presse-papiers")
-        g.large(a["paste"])
-        g.column(a["cut"], a["copy"], R(a["format_painter"], SMALL, text="Reproduire la mise en forme"))
+        g.large(a["paste"], menu=self._menu(a["paste"], a["paste_special"]), split=True)
+        painter_btn = R(a["format_painter"], SMALL, text="Reproduire la mise en forme")
+        painter_btn.installEventFilter(self)
+        self._painter_btn = painter_btn
+        g.column(a["cut"], a["copy"], painter_btn)
         home.addWidget(g)
 
         g = RibbonGroup("Police", self.show_text_format, "Format du texte (police, alignement…)")
@@ -654,8 +690,18 @@ class MainWindow(QMainWindow):
         home.addWidget(g)
 
         g = RibbonGroup("Paragraphe", self.show_text_format, "Paragraphe")
-        g.column(g.row(a["valign_top"], a["valign_middle"], a["valign_bottom"]),
-                 g.row(a["halign_left"], a["halign_center"], a["halign_right"], a["halign_justify"]))
+        spacing = QMenu(self)
+        for v in (1.0, 1.15, 1.5, 2.0, 2.5, 3.0):
+            act = spacing.addAction(f"{v:g}".replace(".", ","))
+            act.setCheckable(True)
+            act.setData(v)
+            act.triggered.connect(lambda _=False, x=v: self._text_style({"spacing": x}))
+        spacing.aboutToShow.connect(lambda m=spacing: self._check_spacing(m))
+        g.column(g.row(a["valign_top"], a["valign_middle"], a["valign_bottom"], a["bullets"],
+                       R(None, ICON, icon_name="line_spacing", menu=spacing,
+                         tooltip="<b>Interligne</b><br>Espace entre les lignes du texte.")),
+                 g.row(a["halign_left"], a["halign_center"], a["halign_right"], a["halign_justify"],
+                       a["indent_less"], a["indent_more"]))
         home.addWidget(g)
 
         g = RibbonGroup("Outils")
@@ -664,6 +710,7 @@ class MainWindow(QMainWindow):
                                a["tool_freeform"], a["tool_arc"])
         g.column(a["tool_connector"], a["tool_text"],
                  R(None, SMALL, text="Outils de dessin", icon_name="drawing_tools", menu=draw_menu))
+        g.column(R(a["tool_port"], ICON), R(a["tool_textblock"], ICON))
         home.addWidget(g)
 
         g = RibbonGroup("Styles de forme", lambda: self.show_pane("format"), "Format de la forme")
@@ -932,10 +979,11 @@ class MainWindow(QMainWindow):
         g = RibbonGroup("Explorateur")
         g.large(a["pane_drawing"])
         view.addWidget(g)
-        g = RibbonGroup("Afficher")
-        g.column(self._check(a["rulers"]), self._check(a["grid"]))
+        g = RibbonGroup("Afficher", self.ruler_grid_dialog, "Règle et grille…")
+        g.column(self._check(a["rulers"]), self._check(a["page_breaks"]), self._check(a["grid"]))
+        g.column(self._check(a["ruler_guides"]))
         view.addWidget(g)
-        g = RibbonGroup("Aide visuelle")
+        g = RibbonGroup("Aide visuelle", self.snap_glue_dialog, "Accrocher et coller…")
         g.column(self._check(a["guides"]), self._check(a["autoconnect"]), self._check(a["ports"]))
         g.column(self._check(a["snap"]), self._check(a["line_jumps"], "Sauts de ligne"))
         view.addWidget(g)
@@ -946,6 +994,10 @@ class MainWindow(QMainWindow):
         view.addWidget(g)
         g = RibbonGroup("Fenêtre")
         g.large(a["new_window"])
+        self.switch_menu = QMenu(self)
+        self.switch_menu.aboutToShow.connect(self._fill_switch_menu)
+        g.column(a["arrange_all"], a["cascade"],
+                 R(None, SMALL, text="Changer de fenêtre", icon_name="new_window", menu=self.switch_menu))
         panes_menu = self._menu(a["show_shapes"], *[a[f"pane_{k}"] for k, _t, _i in PANES])
         g.large(None, text="Volets des tâches", icon_name="task_panes", menu=panes_menu)
         view.addWidget(g)
@@ -999,9 +1051,42 @@ class MainWindow(QMainWindow):
             p.end()
             act = m.addAction(f"{w:g} pt")
             act.setIcon(QIcon(pm))
-            act.triggered.connect(lambda _=False, v=w: self._sc(
-                lambda s: s.apply_line_to_selection({"line_width": v * 96 / 72}, "Épaisseur du trait"))())
+            act.setCheckable(True)
+            act.setData(w)
+            act.triggered.connect(lambda _=False, v=w: self.set_line_weight(v))
+        m.addSeparator()
+        m.addAction("Autres épaisseurs…", self.custom_line_weight)
+        m.aboutToShow.connect(lambda menu=m: self._check_current_weight(menu))
         return m
+
+    def _current_line_weight(self) -> float | None:
+        """Épaisseur (pt) de l'objet sélectionné, connecteur compris."""
+        sc = self.scene()
+        sel = sc.selected_all() if sc is not None else []
+        return sel[0].style["line_width"] * 72 / 96 if sel else None
+
+    def _check_current_weight(self, menu: QMenu) -> None:
+        cur = self._current_line_weight()
+        for act in menu.actions():
+            if act.isCheckable():
+                act.setChecked(cur is not None and abs(act.data() - cur) < 0.01)
+
+    def set_line_weight(self, points: float) -> None:
+        """Épaisseur du trait des formes et des connecteurs sélectionnés, en points."""
+        sc = self.scene()
+        if sc is None:
+            return
+        if not sc.selected_all():
+            self.statusBar().showMessage("Sélectionnez une forme ou un connecteur.", 4000)
+            return
+        sc.apply_line_to_selection({"line_width": points * 96 / 72}, "Épaisseur du trait")
+
+    def custom_line_weight(self) -> None:
+        cur = self._current_line_weight()
+        value, ok = QInputDialog.getDouble(self, "Épaisseur du trait", "Épaisseur (pt) :",
+                                           cur if cur is not None else 0.75, 0.25, 36.0, 2)
+        if ok:
+            self.set_line_weight(value)
 
     def _dash_menu(self) -> QMenu:
         m = QMenu("Tirets", self)
@@ -1185,7 +1270,12 @@ class MainWindow(QMainWindow):
         rulers = self.settings.value("view/rulers", True, type=bool)
         self.a["rulers"].setChecked(rulers)
         self.canvas.set_rulers_visible(rulers)
+        guides = self.settings.value("view/ruler_guides", True, type=bool)
+        self.a["ruler_guides"].setChecked(guides)
+        from .scene import DiagramScene
+        DiagramScene.show_ruler_guides = guides
         self.a["line_jumps"].setChecked(s.get("line_jumps", True))
+        self.a["page_breaks"].setChecked(bool(s.get("page_breaks")))
 
     def _pages_changed(self) -> None:
         doc = self.doc
@@ -1195,13 +1285,16 @@ class MainWindow(QMainWindow):
                 p.autoconnectHover.connect(self._quick_shapes)
                 self._connected_scenes.add(id(p))
         self.page_tabs.blockSignals(True)
-        while self.page_tabs.count():
-            self.page_tabs.removeTab(0)
-        for p in doc.pages:
-            i = self.page_tabs.addTab(p.page_name)
-            if p.is_background:
-                self.page_tabs.setTabIcon(i, icons.icon("background_page"))
-                self.page_tabs.setTabToolTip(i, "Page d'arrière-plan")
+        names = [p.page_name for p in doc.pages]
+        if [self.page_tabs.tabText(i) for i in range(self.page_tabs.count())] != names:
+            # Reconstruits seulement s'ils diffèrent : un onglet en cours de glissement reste en place.
+            while self.page_tabs.count():
+                self.page_tabs.removeTab(0)
+            for p in doc.pages:
+                self.page_tabs.addTab(p.page_name)
+        for i, p in enumerate(doc.pages):
+            self.page_tabs.setTabIcon(i, icons.icon("background_page") if p.is_background else QIcon())
+            self.page_tabs.setTabToolTip(i, "Page d'arrière-plan" if p.is_background else "")
         cur = self.scene()
         if cur in doc.pages:
             self.page_tabs.setCurrentIndex(doc.pages.index(cur))
@@ -1405,7 +1498,7 @@ class MainWindow(QMainWindow):
                 self.font_combo.setCurrentFont(QFont(ts["font"]))
                 self.font_combo.blockSignals(False)
                 self.size_combo.setEditText(f"{ts['size']:g}")
-                for k in ("bold", "italic", "underline", "strike"):
+                for k in ("bold", "italic", "underline", "strike", "bullets"):
                     self.a[k].blockSignals(True)
                     self.a[k].setChecked(bool(ts.get(k)))
                     self.a[k].blockSignals(False)
@@ -1479,6 +1572,11 @@ class MainWindow(QMainWindow):
         md = QMimeData()
         md.setData(CLIP_MIME, data)
         md.setText("\n".join(i.text for i in sc.selected_all() if i.text))
+        # Image et SVG : la sélection se colle aussi dans LibreOffice, GIMP ou un courriel.
+        picture = export.selection_clipboard(sc)
+        if picture is not None:
+            md.setImageData(picture[0])
+            md.setData("image/svg+xml", picture[1])
         QApplication.clipboard().setMimeData(md)
         self._paste_count = 0
 
@@ -1510,6 +1608,43 @@ class MainWindow(QMainWindow):
             st["h"] = max(st["h"], mm_to_px(6) * (text.count("\n") + 1))
             sc.add_states([st], "Coller du texte")
 
+    def paste_special(self) -> None:
+        """Accueil > Coller > Collage spécial : choix du format parmi ceux du presse-papiers."""
+        md = QApplication.clipboard().mimeData()
+        sc = self.scene()
+        if md is None or sc is None:
+            return
+        choices = []
+        if md.hasFormat(CLIP_MIME):
+            choices.append(("shapes", f"Formes {APP_NAME}"))
+        if md.hasImage():
+            choices.append(("image", "Image (PNG)"))
+        if md.hasText() and md.text().strip():
+            choices.append(("text", "Texte non mis en forme"))
+        if not choices:
+            self.statusBar().showMessage("Le presse-papiers ne contient rien à coller.", 4000)
+            return
+        label, ok = QInputDialog.getItem(self, "Collage spécial", "Coller en tant que :",
+                                         [c[1] for c in choices], 0, False)
+        if not ok:
+            return
+        kind = next(k for k, t in choices if t == label)
+        if kind == "shapes":
+            self.paste()
+        elif kind == "image":
+            img = md.imageData()
+            if img is not None and not img.isNull():
+                buf = QBuffer()
+                buf.open(QIODevice.OpenModeFlag.WriteOnly)
+                img.save(buf, "PNG")
+                self._insert_image_bytes(bytes(buf.data()), self._view_center())
+        else:
+            text = security.clean_text(md.text(), fileformat.MAX_TEXT)
+            st = sc.new_shape_state("basic.text", self._view_center())
+            st["text"] = text
+            st["h"] = max(st["h"], mm_to_px(6) * (text.count("\n") + 1))
+            sc.add_states([st], "Coller du texte")
+
     def duplicate(self) -> None:
         sc = self.scene()
         data = sc.copy_selection() if sc else None
@@ -1523,6 +1658,8 @@ class MainWindow(QMainWindow):
         if sc.selected_guide is not None and not sc.selected_all():
             sc.remove_guide(sc.selected_guide)
             return
+        if self.doc.tool == "port" and sc.remove_selected_port():
+            return
         locked = [s for s in sc.selected_shapes() if s.locked]
         sc.delete_selection()
         if locked:
@@ -1532,6 +1669,20 @@ class MainWindow(QMainWindow):
         sc = self.scene()
         if sc is not None and sc.single_selected is not None:
             sc.single_selected.start_edit()
+
+    def format_painter_sticky(self) -> None:
+        sc = self.scene()
+        if sc is None or sc.single_selected is None:
+            self.statusBar().showMessage("Sélectionnez d'abord la forme dont copier la mise en forme.", 5000)
+            return
+        act = self.a["format_painter"]
+        if not act.isChecked():
+            act.setChecked(True)
+        if sc.format_painter is None:
+            self.format_painter(True)
+        if sc.format_painter is not None:
+            sc.format_painter["sticky"] = True
+            self.statusBar().showMessage("Cliquez sur les formes à mettre en forme ; Échap pour terminer.")
 
     def format_painter(self, on: bool) -> None:
         sc = self.scene()
@@ -1561,6 +1712,25 @@ class MainWindow(QMainWindow):
             return
         if 1 <= v <= 400:
             self._text_style({"size": v})
+
+    def _indent_step(self, direction: int) -> None:
+        """Augmente ou diminue le retrait de chaque objet sélectionné d'un niveau (0,25 pouce)."""
+        sc = self.scene()
+        sel = [i for i in (sc.selected_all() if sc else []) if not getattr(i, "locked", False)]
+        if not sel:
+            return
+
+        def step(_it, st):
+            st["text_style"]["indent"] = min(fileformat.MAX_INDENT,
+                                             max(0, int(st["text_style"].get("indent", 0)) + direction))
+        sc.modify(sel, step, "Augmenter le retrait" if direction > 0 else "Diminuer le retrait")
+
+    def _check_spacing(self, menu: QMenu) -> None:
+        sc = self.scene()
+        sel = sc.selected_all() if sc else []
+        cur = sel[0].text_style.get("spacing", 1.0) if sel else None
+        for act in menu.actions():
+            act.setChecked(cur is not None and abs(act.data() - cur) < 1e-6)
 
     def _font_step(self, direction: int) -> None:
         sc = self.scene()
@@ -1611,8 +1781,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ Favoris (Mes formes)
     def _favorites(self):
         if getattr(self.ctx, "favorites", None) is None:
-            base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-            folder = security.private_dir(os.path.join(base, APP_NAME))
+            folder = security.private_dir(compat.config_dir())
             self.ctx.favorites = favorites.Favorites(os.path.join(folder, "favoris.json"))
         return self.ctx.favorites
 
@@ -2435,13 +2604,12 @@ class MainWindow(QMainWindow):
     def check_spelling(self) -> None:
         """Révision > Orthographe (F7) : page active d'abord, puis les autres pages."""
         if getattr(self.ctx, "speller", None) is None:
-            base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-            folder = security.private_dir(os.path.join(base, APP_NAME))
+            folder = security.private_dir(compat.config_dir())
             self.ctx.speller = spellcheck.SpellChecker(os.path.join(folder, "dictionnaire.txt"))
         checker = self.ctx.speller
         if not checker.available:
             QMessageBox.information(self, "Orthographe", "Aucun dictionnaire Hunspell n'est installé.\n"
-                                    "Installez par exemple le paquet « hunspell-fr » de votre distribution.")
+                                    + spellcheck.install_hint())
             return
         sc = self.scene()
         if sc is not None and sc.editing_item is not None:
@@ -2548,12 +2716,28 @@ class MainWindow(QMainWindow):
             act.setChecked(sc.is_background)
             act.blockSignals(False)
 
+    def _page_tab_moved(self, src: int, dst: int) -> None:
+        order = list(self.doc.pages)
+        if not (0 <= src < len(order) and 0 <= dst < len(order)):
+            return
+        order.insert(dst, order.pop(src))
+        self.doc.undo_stack.push(ReorderPagesCommand(self.doc, self.doc.pages, order))
+
+    def reorder_pages_dialog(self) -> None:
+        """« Réorganiser les pages » : liste à glisser ou boutons Monter / Descendre."""
+        dlg = ReorderPagesDialog(self, self.doc.pages)
+        if dlg.exec() == ReorderPagesDialog.DialogCode.Accepted:
+            order = dlg.order()
+            if order != self.doc.pages:
+                self.doc.undo_stack.push(ReorderPagesCommand(self.doc, self.doc.pages, order))
+
     def _page_menu(self, pos) -> None:
         idx = self.page_tabs.tabAt(pos)
         if idx >= 0:
             self.show_page(self.doc.pages[idx])
         self._update_page_type_actions()
-        m = self._menu(self.a["page_add"], self.a["page_dup"], self.a["page_rename"], self.a["page_del"], None,
+        m = self._menu(self.a["page_add"], self.a["page_dup"], self.a["page_rename"], self.a["page_del"],
+                       ("Réorganiser les pages…", "page_dup", self.reorder_pages_dialog), None,
                        self.a["page_background_new"], self.a["page_is_background"], self._backpage_menu(), None,
                        self.a["page_setup"])
         m.exec(self.page_tabs.mapToGlobal(pos))
@@ -2615,6 +2799,72 @@ class MainWindow(QMainWindow):
         self.settings.setValue(f"view/{key}", on)
         if self.doc is not None:
             self.doc.apply_settings({key: on})
+
+    def _change_doc_settings(self, values: dict, text: str) -> None:
+        before = {k: self.doc.settings.get(k) for k in values}
+        if before != values:
+            self.doc.undo_stack.push(DocSettingsCommand(self.doc, before, dict(values), text))
+            self._sync_view_checks()
+
+    def _sync_view_checks(self) -> None:
+        for key in ("snap", "guides"):
+            act = self.a[key]
+            if act.isChecked() != bool(self.doc.settings.get(key)):
+                act.setChecked(bool(self.doc.settings.get(key)))
+
+    def ruler_grid_dialog(self) -> None:
+        dlg = RulerGridDialog(self, self.doc.settings)
+        if dlg.exec() == RulerGridDialog.DialogCode.Accepted:
+            self._change_doc_settings(dlg.values(), "Règle et grille")
+
+    def snap_glue_dialog(self) -> None:
+        dlg = SnapGlueDialog(self, self.doc.settings)
+        if dlg.exec() == SnapGlueDialog.DialogCode.Accepted:
+            self._change_doc_settings(dlg.values(), "Accrocher et coller")
+
+    def toggle_ruler_guides(self, on: bool) -> None:
+        self.settings.setValue("view/ruler_guides", on)
+        from .scene import DiagramScene
+        DiagramScene.show_ruler_guides = on
+        for w in self.ctx.windows:
+            if w is not self and w.a["ruler_guides"].isChecked() != on:
+                w.a["ruler_guides"].setChecked(on)
+            if w.doc is not None:
+                for p in w.doc.pages:
+                    p.update()
+
+    # ------------------------------------------------------------------ fenêtres
+    def _fill_switch_menu(self) -> None:
+        self.switch_menu.clear()
+        for i, w in enumerate(self.ctx.windows, start=1):
+            act = self.switch_menu.addAction(f"{i} {w.doc_title()}")
+            act.setCheckable(True)
+            act.setChecked(w is self)
+            act.triggered.connect(lambda _=False, win=w: (win.showNormal() if win.isMinimized() else None,
+                                                          win.raise_(), win.activateWindow()))
+
+    def _screen_area(self):
+        screen = self.screen() or QApplication.primaryScreen()
+        return screen.availableGeometry()
+
+    def arrange_windows(self) -> None:
+        """Affichage > Réorganiser tout : fenêtres côte à côte sur l'écran."""
+        wins = [w for w in self.ctx.windows if w.isVisible()]
+        if not wins:
+            return
+        for w, rect in zip(wins, tile_rects(len(wins), self._screen_area())):
+            w.showNormal()
+            w.setGeometry(rect)
+
+    def cascade_windows(self) -> None:
+        wins = [w for w in self.ctx.windows if w.isVisible()]
+        area = self._screen_area()
+        w0, h0 = int(area.width() * 0.7), int(area.height() * 0.75)
+        for i, w in enumerate(wins):
+            w.showNormal()
+            off = (i % 10) * 32
+            w.setGeometry(area.x() + off, area.y() + off, w0, h0)
+            w.raise_()
 
     def toggle_rulers(self, on: bool) -> None:
         self.settings.setValue("view/rulers", on)
@@ -2710,6 +2960,13 @@ class MainWindow(QMainWindow):
             self.quick_popup.hide()
 
     def eventFilter(self, obj, ev):  # noqa: N802
+        # Double-clic sur « Reproduire la mise en forme » : le pinceau reste actif (Office).
+        if obj is getattr(self, "_painter_btn", None) and ev.type() == QEvent.Type.MouseButtonDblClick:
+            self.format_painter_sticky()
+            return True
+        quick = getattr(self, "quick_popup", None)
+        if quick is None:
+            return super().eventFilter(obj, ev)
         if obj is self.quick_popup and ev.type() == ev.Type.Leave:
             self._quick_hide.start(300)
         elif obj is self.quick_popup and ev.type() == ev.Type.Enter:
@@ -2752,6 +3009,13 @@ class MainWindow(QMainWindow):
         line = self._color_button("line_color", "Trait", self.line_btn.current,
                                   lambda c: (menu.close(), self._sc(lambda s: s.apply_line_to_selection({"line": c}))()),
                                   none_label="Aucun trait", kind=ICON)
+        # Comme la mini-barre de Visio : le bouton Trait propose aussi épaisseur, tirets et flèches.
+        line_menu = line.menu()
+        line_menu.addSeparator()
+        line_menu.addMenu(self._weight_menu())
+        line_menu.addMenu(self._dash_menu())
+        if any(isinstance(i, ConnectorItem) for i in sel):
+            line_menu.addMenu(self._arrow_menu())
         lay.addWidget(fill, 1, 5)
         lay.addWidget(line, 1, 6)
         lay.addWidget(RibbonButton(self.a["format_painter"], ICON), 1, 7)
@@ -2827,6 +3091,9 @@ class MainWindow(QMainWindow):
                 menu.addAction(a["lock"] if not single.locked else a["unlock"])
             if any(isinstance(i, ConnectorItem) for i in sel):
                 menu.addSeparator()
+                menu.addMenu(self._weight_menu())
+                menu.addMenu(self._dash_menu())
+                menu.addMenu(self._arrow_menu())
                 for r in ROUTES:
                     act = menu.addAction(icons.icon("route"), f"Connecteur {ROUTE_LABELS[r].lower()}")
                     act.triggered.connect(lambda _=False, v=r: sc.apply_connector_style(
@@ -2849,6 +3116,7 @@ class MainWindow(QMainWindow):
     # ================================================================== backstage
     def show_backstage(self, page: str = "home") -> None:
         self.backstage.set_recent(self.ctx.recent_files())
+        self.backstage.sync_print_options()
         self.backstage.select(page)
         self.stack.setCurrentIndex(1)
         self.statusBar().hide()
@@ -2863,6 +3131,7 @@ class MainWindow(QMainWindow):
             "save": self.save, "save_as": self.save_as, "close": self.close,
             "export_pdf": self.export_pdf, "export_png": lambda: self.export_image("png"),
             "export_jpg": lambda: self.export_image("jpg"), "export_svg": self.export_svg,
+            "export_html": self.export_html,
             "export_vsdx": self.export_vsdx, "import_vsdx": self.import_vsdx_dialog,
             "protect": self.protect, "unprotect": self.unprotect, "properties": self.edit_properties,
             "options": self.show_options, "check_diagram": self.check_diagram,
@@ -2911,8 +3180,7 @@ class MainWindow(QMainWindow):
 
     # ================================================================== fichiers
     def _last_dir(self) -> str:
-        docs = os.path.expanduser("~/Documents")
-        return self.settings.value("files/last_dir", docs if os.path.isdir(docs) else os.path.expanduser("~"))
+        return self.settings.value("files/last_dir", compat.documents_dir())
 
     def _remember_dir(self, path: str) -> None:
         self.settings.setValue("files/last_dir", os.path.dirname(os.path.abspath(path)))
@@ -3068,6 +3336,13 @@ class MainWindow(QMainWindow):
             self._run_export(lambda: export.export_image(sc, path, opts["mode"], opts["dpi"], opts["transparent"]),
                              path)
 
+    def export_html(self) -> None:
+        path = self._export_path("Enregistrer comme page web", "Page web (*.html *.htm)", ".html")
+        if path:
+            title = self.doc.properties.get("title") or self.doc_title()
+            pages = [p for p in self.doc.pages if not p.is_background] or list(self.doc.pages)
+            self._run_export(lambda: export.export_html(pages, path, title), path)
+
     def export_svg(self) -> None:
         sc = self.scene()
         path = self._export_path("Exporter en SVG", "Image SVG (*.svg)", ".svg")
@@ -3120,8 +3395,8 @@ class MainWindow(QMainWindow):
 
     def about(self) -> None:
         QMessageBox.about(self, f"À propos de {APP_NAME}",
-                          f"<h3>{APP_NAME} {__version__}</h3><p>Éditeur de diagrammes libre et natif pour "
-                          "Linux, compatible avec les fichiers .vsdx, sans macros ni connexion réseau.</p>"
+                          f"<h3>{APP_NAME} {__version__}</h3><p>Éditeur de diagrammes libre pour Linux, "
+                          "Windows et macOS, compatible avec les fichiers .vsdx, sans macros ni connexion réseau.</p>"
                           "<p>© 2026 Joss943 et les contributeurs — licence MIT.<br>"
                           "Interface Qt 6 via PyQt6 (GPL v3).</p>"
                           "<p><small>Projet indépendant, non affilié à Microsoft, ni approuvé ou soutenu "

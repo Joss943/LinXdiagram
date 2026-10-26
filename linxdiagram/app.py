@@ -8,33 +8,16 @@ import sys
 import time
 import traceback
 
-from PyQt6.QtCore import QObject, QSettings, Qt
+from PyQt6.QtCore import QEvent, QObject, QSettings, Qt
 from PyQt6.QtGui import QFontDatabase, QGuiApplication
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
-from . import APP_ID, APP_NAME, ORG_NAME, __version__, fileformat, icons, security, style, units
+from . import APP_ID, APP_NAME, ORG_NAME, __version__, compat, fileformat, icons, security, style, units
 from .document import Document
 from .scene import set_dark_canvas
 
 MAX_RECENT = 12
 _AUTOSAVE_RE = re.compile(r"^([0-9a-f]{16})-(\d+)\.lxd$")
-
-
-def _xdg(var: str, fallback: str) -> str:
-    base = os.environ.get(var)
-    if not base or not os.path.isabs(base):
-        base = os.path.expanduser(fallback)
-    return os.path.join(base, APP_NAME)
-
-
-def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
 
 
 class AppContext(QObject):
@@ -45,8 +28,7 @@ class AppContext(QObject):
         self.windows: list = []
         self._untitled: dict[int, str] = {}
         self._counter = 0
-        self.autosave_dir = security.private_dir(os.path.join(_xdg("XDG_DATA_HOME", "~/.local/share"),
-                                                              "autosave"))
+        self.autosave_dir = security.private_dir(os.path.join(compat.data_dir(), "autosave"))
 
     # ---------------------------------------------------------------- fenêtres
     def new_window(self, doc: Document | None = None, title_hint: str | None = None):
@@ -59,6 +41,17 @@ class AppContext(QObject):
             w.move(prev.pos().x() + 32, prev.pos().y() + 32)
         w.show()
         return w
+
+    def eventFilter(self, obj, event):  # noqa: N802 (API Qt)
+        # macOS : un double-clic dans le Finder envoie QFileOpenEvent au lieu d'un argument.
+        if event.type() == QEvent.Type.FileOpen and event.file():
+            self.open_file(event.file())
+            return True
+        return super().eventFilter(obj, event)
+
+    def open_file(self, path: str) -> None:
+        target = self.windows[-1] if self.windows else self.new_window()
+        target.open_path(path)
 
     def window_closed(self, w) -> None:
         if w in self.windows:
@@ -124,7 +117,7 @@ class AppContext(QObject):
             return out
         for name in names:
             m = _AUTOSAVE_RE.match(name)
-            if m and not _pid_alive(int(m.group(2))):
+            if m and not compat.pid_alive(int(m.group(2))):
                 out.append(os.path.join(self.autosave_dir, name))
         return sorted(out, key=os.path.getmtime, reverse=True)
 
@@ -191,7 +184,7 @@ def apply_theme(app: QApplication, dark: bool) -> None:
 
 def _pick_default_font() -> None:
     families = set(QFontDatabase.families())
-    for fam in ("Calibri", "Carlito", "Noto Sans", "Cantarell", "DejaVu Sans", "Liberation Sans"):
+    for fam in compat.ui_font_candidates():
         if fam in families:
             units.set_default_font(fam)
             return
@@ -199,14 +192,14 @@ def _pick_default_font() -> None:
 
 
 def _install_excepthook() -> None:
-    log_dir = security.private_dir(_xdg("XDG_STATE_HOME", "~/.local/state"))
+    log_dir = security.private_dir(compat.state_dir())
     last = [0.0]
 
     def hook(exc_type, exc, tb):
         text = "".join(traceback.format_exception(exc_type, exc, tb))
         try:
             fd = os.open(os.path.join(log_dir, "erreurs.log"),
-                         os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_CLOEXEC, 0o600)
+                         os.O_WRONLY | os.O_CREAT | os.O_APPEND | security.O_CLOEXEC, 0o600)
             with os.fdopen(fd, "a", encoding="utf-8") as f:
                 f.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} {APP_NAME} {__version__}\n{text}\n")
         except OSError:
@@ -221,6 +214,15 @@ def _install_excepthook() -> None:
     sys.excepthook = hook
 
 
+def _set_windows_app_id() -> None:
+    """Regroupe les fenêtres sous la bonne icône dans la barre des tâches Windows."""
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+    except (AttributeError, OSError):
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv if argv is None else argv)
     if "--version" in argv:
@@ -228,13 +230,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if "--help" in argv or "-h" in argv:
         print(f"Usage : linxdiagram [FICHIER.lxd | FICHIER.vsdx]…\n\n{APP_NAME} {__version__} — "
-              "éditeur de diagrammes natif pour Linux.")
+              "éditeur de diagrammes pour Linux, Windows et macOS.")
         return 0
     security.harden_process()
     QApplication.setApplicationName(APP_NAME)
     QApplication.setOrganizationName(ORG_NAME)
     QApplication.setApplicationVersion(__version__)
-    QGuiApplication.setDesktopFileName(APP_ID)
+    if compat.IS_LINUX:
+        QGuiApplication.setDesktopFileName(APP_ID)
+    if compat.IS_WINDOWS:
+        _set_windows_app_id()
     app = QApplication(argv)
     app.setWindowIcon(icons.app_icon())
     settings = QSettings(ORG_NAME, APP_NAME)
@@ -242,6 +247,7 @@ def main(argv: list[str] | None = None) -> int:
     _pick_default_font()
     _install_excepthook()
     ctx = AppContext(app)
+    app.installEventFilter(ctx)
     app.setQuitOnLastWindowClosed(True)
     files = [a for a in argv[1:] if not a.startswith("-")]
     recovered = ctx.recover()

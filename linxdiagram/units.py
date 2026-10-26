@@ -8,6 +8,7 @@ donc une simple division par 96.
 from __future__ import annotations
 
 PX_PER_INCH = 96.0
+INDENT_PX = PX_PER_INCH / 4  # un niveau de retrait = 0,25 pouce, comme Visio
 PX_PER_MM = PX_PER_INCH / 25.4
 
 GRID_MM = 5.0
@@ -88,7 +89,8 @@ def text_style(theme: str = DEFAULT_THEME, label: bool = False) -> dict:
     t = THEMES.get(theme, THEMES[DEFAULT_THEME])
     return {"font": default_font(), "size": 11.0, "bold": False, "italic": False,
             "underline": False, "strike": False, "color": t["label"] if label else t["text"],
-            "halign": "center", "valign": "top" if label else "middle"}
+            "halign": "center", "valign": "top" if label else "middle",
+            "bullets": False, "indent": 0, "spacing": 1.0}
 
 
 def connector_style(theme: str = DEFAULT_THEME, route: str = "orthogonal") -> dict:

@@ -7,7 +7,7 @@ import unittest
 from PyQt6.QtCore import QPoint, QPointF, Qt
 from PyQt6.QtTest import QTest
 
-from tests.helpers import qapp
+from tests.helpers import hover, qapp
 
 from linxdiagram import app as appmod, fileformat, templates
 from linxdiagram.document import Document
@@ -83,7 +83,7 @@ class UiTest(unittest.TestCase):
         b = self.sc.add_shape("flow.decision", QPointF(500, 420))
         self.sc.clearSelection()
         port, _ = a.port_scene(1)
-        QTest.mouseMove(self.vp, self.P(port.x(), port.y()))
+        hover(self.vp, self.P(port.x(), port.y()))
         self.app.processEvents()
         self.assertIsNotNone(self.sc.hover_port)
         self.drag(self.P(port.x(), port.y()), self.P(b.pos().x(), b.pos().y()))
@@ -97,9 +97,9 @@ class UiTest(unittest.TestCase):
     def test_autoconnect_and_typing(self):
         a = self.sc.add_shape("flow.process", QPointF(200, 200))
         self.sc.clearSelection()
-        QTest.mouseMove(self.vp, self.P(a.pos().x(), a.pos().y()))
+        hover(self.vp, self.P(a.pos().x(), a.pos().y()))
         pts = self.sc._autoconnect_points(a)
-        QTest.mouseMove(self.vp, self.P(pts[2].x(), pts[2].y()))
+        hover(self.vp, self.P(pts[2].x(), pts[2].y()))
         self.app.processEvents()
         self.assertEqual(self.sc.hover_arrow, 2)
         QTest.mouseClick(self.vp, L, NOMOD, self.P(pts[2].x(), pts[2].y()))

@@ -7,6 +7,8 @@ reconstruit à l'identique depuis son état.
 
 from __future__ import annotations
 
+import time
+
 from PyQt6.QtGui import QUndoCommand
 
 
@@ -141,3 +143,34 @@ class DocSettingsCommand(QUndoCommand):
 
     def undo(self):
         self.doc.apply_settings(self.before)
+
+
+class ReorderPagesCommand(QUndoCommand):
+    """Nouvel ordre des pages (onglets glissés ou « Réorganiser les pages »)."""
+
+    _ID = 4343
+
+    def __init__(self, doc, before: list, after: list, text: str = "Réorganiser les pages"):
+        super().__init__(text)
+        self.doc = doc
+        self.before = list(before)
+        self.after = list(after)
+        self.when = time.monotonic()
+
+    def id(self):  # noqa: A003 (API Qt)
+        return self._ID
+
+    def mergeWith(self, other):  # noqa: N802
+        # Un même glisser d'onglet produit plusieurs déplacements : une seule annulation.
+        if (not isinstance(other, ReorderPagesCommand) or other.doc is not self.doc
+                or other.when - self.when > 2.0):
+            return False
+        self.after = list(other.after)
+        self.when = other.when
+        return True
+
+    def redo(self):
+        self.doc.set_page_order(self.after)
+
+    def undo(self):
+        self.doc.set_page_order(self.before)

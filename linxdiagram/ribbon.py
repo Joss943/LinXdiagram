@@ -14,6 +14,7 @@ from .style import T
 
 LARGE, SMALL, ICON = range(3)
 LARGE_H = 68
+FIT_MARGIN = 6  # px gardés libres à droite du ruban
 SMALL_H = 22
 
 
@@ -507,7 +508,9 @@ class RibbonPage(QWidget):
         groups = self.groups()
         if not groups:
             return
-        avail = self.width()
+        # Marge de sécurité : les largeurs estimées (polices à métrique fractionnaire, Windows)
+        # peuvent différer d'un pixel des largeurs réelles après mise en page.
+        avail = self.width() - FIT_MARGIN
         for g in groups:
             g.set_collapsed(False)
             for gal in g.galleries():
@@ -555,6 +558,9 @@ class Ribbon(QWidget):
         self.tabbar.setObjectName("RibbonTabBar")
         self.tabbar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.tabbar.setFixedHeight(36)
+        # Les onglets peuvent être rognés sur une fenêtre étroite, comme dans Office : ils
+        # n'imposent pas de largeur minimale à la fenêtre (le ruban replie déjà ses groupes).
+        self.tabbar.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         tl = QHBoxLayout(self.tabbar)
         tl.setContentsMargins(0, 0, 6, 0)
         tl.setSpacing(0)

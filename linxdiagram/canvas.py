@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import QFrame, QGraphicsView, QGridLayout, QWidget
 
 from .items import ConnectorItem, ShapeItem
 from .scene import paint_canvas_backdrop
-from .units import GRID_PX, PX_PER_MM
+from .units import PX_PER_MM
 
 STENCIL_MIME = "application/x-linxdiagram-stencil"
 MIN_ZOOM, MAX_ZOOM = 0.1, 8.0
@@ -203,7 +203,7 @@ class DiagramView(QGraphicsView):
             self.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
             return
         if key in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
-            step = 1.0 if mods & Qt.KeyboardModifier.ShiftModifier else GRID_PX
+            step = 1.0 if mods & Qt.KeyboardModifier.ShiftModifier else sc.grid_px
             dx = {Qt.Key.Key_Left: -step, Qt.Key.Key_Right: step}.get(key, 0.0)
             dy = {Qt.Key.Key_Up: -step, Qt.Key.Key_Down: step}.get(key, 0.0)
             sc.nudge(dx, dy)

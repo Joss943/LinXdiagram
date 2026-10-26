@@ -16,7 +16,8 @@ import math
 from PyQt6.QtCore import QBuffer, QByteArray, QIODevice, QLineF, QPointF, QRectF, Qt
 from PyQt6.QtGui import (QBrush, QColor, QFont, QImageReader, QKeySequence, QLinearGradient,
                          QFontMetricsF, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap,
-                         QPolygonF, QTextDocument, QTextOption, QTransform)
+                         QPolygonF, QTextBlockFormat, QTextCursor, QTextDocument, QTextListFormat,
+                         QTextOption, QTransform)
 from PyQt6.QtWidgets import (QApplication, QGraphicsItem, QGraphicsTextItem, QMenu,
                              QStyleOptionGraphicsItem)
 
@@ -24,7 +25,7 @@ from . import fields, security, stencils
 from .fileformat import MAX_TEXT, clean_data_links, normalize_status_key
 from .routing import axis_direction, curve_controls, route_orthogonal
 from .swimlanes import HEADER as CFF_HEADER, PHASE as CFF_PHASE, TITLE as CFF_TITLE
-from .units import GRID_PX, MIN_SIZE_PX, mm_to_px
+from .units import INDENT_PX, MIN_SIZE_PX, mm_to_px
 
 ACCENT = QColor("#2563eb")
 GLUE = QColor("#16a34a")
@@ -110,7 +111,7 @@ class TextLabel(QGraphicsTextItem):
         self.document().contentsChanged.connect(self._changed)
 
     def _changed(self) -> None:
-        if self.owner.editing:
+        if self.owner.editing and not self.owner._formatting:
             self.owner.layout_label()
 
     def keyPressEvent(self, event):  # noqa: N802
@@ -171,6 +172,7 @@ class TextOwner(QGraphicsItem):
         self.editing = False
         self._edit_before: dict | None = None
         self._applying = False
+        self._formatting = False  # mise en forme des paragraphes en cours (évite la récursion)
         self.label = TextLabel(self)
 
     def state(self) -> dict:  # pragma: no cover - surchargé
@@ -192,6 +194,38 @@ class TextOwner(QGraphicsItem):
         opt.setAlignment(_HALIGN[ts["halign"]])
         opt.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
         doc.setDefaultTextOption(opt)
+        self._apply_paragraphs(doc, ts)
+
+    def _apply_paragraphs(self, doc, ts: dict) -> None:
+        """Puces, retrait et interligne (Accueil > Paragraphe de Visio) sur tous les paragraphes."""
+        bullets = bool(ts.get("bullets"))
+        indent = int(ts.get("indent", 0)) * INDENT_PX
+        spacing = float(ts.get("spacing", 1.0))
+        first = doc.firstBlock()
+        fmt0 = first.blockFormat()
+        same_spacing = (abs(fmt0.lineHeight() - spacing * 100) < 0.01 if abs(spacing - 1.0) > 1e-6
+                        else fmt0.lineHeightType() == 0)
+        if ((first.textList() is not None) == bullets and abs(fmt0.leftMargin() - indent) < 0.01
+                and same_spacing):
+            return
+        self._formatting = True
+        try:
+            cur = QTextCursor(doc)
+            cur.beginEditBlock()
+            cur.select(QTextCursor.SelectionType.Document)
+            bf = QTextBlockFormat()
+            bf.setLeftMargin(indent)
+            if abs(spacing - 1.0) > 1e-6:
+                bf.setLineHeight(spacing * 100, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+            cur.setBlockFormat(bf)
+            if bullets:
+                lf = QTextListFormat()
+                lf.setStyle(QTextListFormat.Style.ListDisc)
+                lf.setIndent(1)
+                cur.createList(lf)
+            cur.endEditBlock()
+        finally:
+            self._formatting = False
 
     def display_text(self) -> str:
         """Texte affiché : les champs ({{page}}, {{date}}…) sont remplacés par leur valeur."""
@@ -264,6 +298,7 @@ class ShapeItem(TextOwner):
         self.image_b64 = ""
         self.custom: list = []
         self.text_rect_override: list | None = None
+        self.custom_ports: list | None = None  # points de connexion ajoutés ou retirés par l'utilisateur
         self.cff_opts: dict = {}  # options interfonctionnelles : title, hidden, rotate
         self.locked = False
         self.tip = ""
@@ -297,6 +332,8 @@ class ShapeItem(TextOwner):
             d["path"] = [list(c) for c in self.custom]
         if self.text_rect_override:
             d["text_rect"] = list(self.text_rect_override)
+        if self.custom_ports is not None:
+            d["ports"] = [list(p) for p in self.custom_ports]
         if self.cff_opts:
             d["cff"] = dict(self.cff_opts)
         return d
@@ -325,6 +362,7 @@ class ShapeItem(TextOwner):
         if self.type_id == "special.custom":
             self.custom = [list(c) for c in st.get("path", [])]
         self.text_rect_override = list(st["text_rect"]) if st.get("text_rect") else None
+        self.custom_ports = [tuple(p) for p in st["ports"]] if st.get("ports") is not None else None
         self.locked = bool(st.get("locked", False))
         self.tip = st.get("tip", "")
         self.comments = [dict(c) for c in st.get("comments", [])]
@@ -585,11 +623,26 @@ class ShapeItem(TextOwner):
         return cursors[(index + step) % 4]
 
     # ------------------------------------------------------------ points de connexion
+    @property
+    def ports(self) -> tuple:
+        """Points de connexion (coordonnées normalisées) : ceux du gabarit ou ceux de la forme."""
+        return tuple(self.custom_ports) if self.custom_ports is not None else self.sdef.ports
+
     def port_count(self) -> int:
-        return len(self.sdef.ports)
+        return len(self.ports)
+
+    def local_norm(self, scene_pos: QPointF) -> tuple[float, float]:
+        """Position normalisée (0..1 sur la boîte, avant retournement) d'un point de la scène."""
+        p = self.mapFromScene(scene_pos)
+        x, y = p.x(), p.y()
+        if self.flip_h:
+            x = -x
+        if self.flip_v:
+            y = -y
+        return (x + self.w / 2) / self.w, (y + self.h / 2) / self.h
 
     def _port_local(self, i: int) -> tuple[QPointF, tuple[float, float]]:
-        nx, ny = self.sdef.ports[i]
+        nx, ny = self.ports[i]
         x = -self.w / 2 + nx * self.w
         y = -self.h / 2 + ny * self.h
         if nx <= 0.001:
@@ -615,7 +668,7 @@ class ShapeItem(TextOwner):
         return self.mapToScene(p), axis_direction(dx, dy)
 
     def _is_side_port(self, i: int) -> bool:
-        nx, ny = self.sdef.ports[i]
+        nx, ny = self.ports[i]
         on_x = nx <= 0.001 or nx >= 0.999
         on_y = ny <= 0.001 or ny >= 0.999
         return on_x != on_y
@@ -921,9 +974,10 @@ class ShapeItem(TextOwner):
         cos, sin = math.cos(rot), math.sin(rot)
         sc = self.scene()
         snap = sc is not None and sc.snap_enabled and abs(math.sin(rot * 2)) < 1e-6
-        if snap:
-            pos = QPointF(round(pos.x() / GRID_PX) * GRID_PX if sx else pos.x(),
-                          round(pos.y() / GRID_PX) * GRID_PX if sy else pos.y())
+        if snap and sc.snap_to_grid:
+            g = sc.grid_px
+            pos = QPointF(round(pos.x() / g) * g if sx else pos.x(),
+                          round(pos.y() / g) * g if sy else pos.y())
         vx, vy = pos.x() - anchor.x(), pos.y() - anchor.y()
         lx = vx * cos + vy * sin
         ly = -vx * sin + vy * cos

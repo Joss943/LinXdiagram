@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import contextlib
+import html
 import math
+import re
 
-from PyQt6.QtCore import QMarginsF, QRectF, QSize, QSizeF, Qt
+from PyQt6.QtCore import QBuffer, QByteArray, QIODevice, QMarginsF, QRectF, QSize, QSizeF, Qt
 from PyQt6.QtGui import QColor, QImage, QPageLayout, QPageSize, QPainter, QPdfWriter
 from PyQt6.QtSvg import QSvgGenerator
 
 from . import APP_NAME, __version__
-from .security import SecurityError, atomic_target
-from .units import PX_PER_MM
+from .security import SecurityError, atomic_target, atomic_write
+from .units import PAGE_SIZES, PX_PER_MM
 
 MAX_IMAGE_SIDE = 16000
 MAX_IMAGE_PIXELS = 160_000_000
@@ -109,6 +111,122 @@ def export_svg(scene, path: str, mode: str = "page") -> None:
             p.end()
 
 
+@contextlib.contextmanager
+def only_items(scene, items):
+    """Rendu limité à ``items`` (copie de la sélection) : les autres objets, la page et
+    son arrière-plan sont masqués le temps du rendu."""
+    keep = set(map(id, items))
+    hidden = [it for it in scene.all_items() if id(it) not in keep and it.isVisible()]
+    for it in hidden:
+        it.setVisible(False)
+    backpage = getattr(scene, "backpage", None)
+    if backpage is not None:
+        scene.backpage = ""
+    try:
+        with exporting(scene, transparent=True):
+            yield
+    finally:
+        if backpage is not None:
+            scene.backpage = backpage
+        for it in hidden:
+            it.setVisible(True)
+
+
+def selection_clipboard(scene, scale: float = 2.0) -> tuple[QImage, bytes] | None:
+    """Image PNG (fond transparent) et SVG de la sélection, pour coller dans une autre
+    application (traitement de texte, présentation, courriel), comme le fait Visio."""
+    items = scene.selected_all()
+    src = source_rect(scene, "selection")
+    if not items or src.isEmpty():
+        return None
+    w, h = math.ceil(src.width() * scale), math.ceil(src.height() * scale)
+    if w > MAX_IMAGE_SIDE or h > MAX_IMAGE_SIDE or w * h > MAX_IMAGE_PIXELS:
+        return None
+    img = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
+    img.fill(QColor(0, 0, 0, 0))
+    data = QByteArray()
+    buf = QBuffer(data)
+    buf.open(QIODevice.OpenModeFlag.WriteOnly)
+    gen = QSvgGenerator()
+    gen.setOutputDevice(buf)
+    gen.setSize(QSize(math.ceil(src.width()), math.ceil(src.height())))
+    gen.setViewBox(QRectF(0, 0, src.width(), src.height()))
+    gen.setResolution(96)
+    with only_items(scene, items):
+        p = QPainter(img)
+        _render(scene, p, QRectF(0, 0, w, h), src)
+        p.end()
+        p = QPainter(gen)
+        _render(scene, p, QRectF(0, 0, src.width(), src.height()), src)
+        p.end()
+    buf.close()
+    return img, bytes(data)
+
+
+def svg_bytes(scene, mode: str = "page") -> bytes:
+    """Rendu SVG d'une page en mémoire."""
+    src = source_rect(scene, mode)
+    data = QByteArray()  # garder une référence : QBuffer ne fait que pointer sur le tableau
+    buf = QBuffer(data)
+    buf.open(QIODevice.OpenModeFlag.WriteOnly)
+    gen = QSvgGenerator()
+    gen.setOutputDevice(buf)
+    gen.setSize(QSize(math.ceil(src.width()), math.ceil(src.height())))
+    gen.setViewBox(QRectF(0, 0, src.width(), src.height()))
+    gen.setResolution(96)
+    gen.setTitle(scene.page_name)
+    with exporting(scene):
+        p = QPainter(gen)
+        _render(scene, p, QRectF(0, 0, src.width(), src.height()), src)
+        p.end()
+    buf.close()
+    return bytes(buf.data())
+
+
+_XML_PROLOG_RE = re.compile(r"^\s*<\?xml[^>]*\?>\s*(<!DOCTYPE[^>]*>\s*)?", re.I)
+
+
+def export_html(pages, path: str, title: str = "") -> None:
+    """« Enregistrer comme page web » : une page HTML autonome, une section par page du
+    dessin, avec navigation par onglets. Aucun script ni ressource externe : la page affichée
+    est choisie par l'ancre de l'URL (:target) ; la première page est placée en dernier dans
+    le code pour que le sélecteur « ~ » puisse la masquer quand une autre est ciblée."""
+    title = title or APP_NAME
+    nav, sections = [], []
+    for i, scene in enumerate(pages):
+        name = html.escape(scene.page_name, quote=True)
+        svg = _XML_PROLOG_RE.sub("", svg_bytes(scene).decode("utf-8", "replace"))
+        svg = svg.replace("<svg ", '<svg role="img" style="max-width:100%;height:auto" ', 1)
+        nav.append(f'<a href="#page-{i + 1}">{name}</a>')
+        cls = ' class="default"' if i == 0 else ""
+        sections.append(f'<section id="page-{i + 1}"{cls}><h2>{name}</h2><div class="sheet">{svg}</div>'
+                        "</section>")
+    doc = f"""<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="generator" content="{APP_NAME} {__version__}">
+<title>{html.escape(title)}</title>
+<style>
+body{{margin:0;font-family:"Segoe UI",Calibri,Carlito,sans-serif;background:#e8e8e8;color:#222}}
+header{{background:#2b579a;color:#fff;padding:10px 16px;font-size:18px}}
+nav{{display:flex;flex-wrap:wrap;gap:2px;background:#f3f3f3;border-bottom:1px solid #ccc;padding:0 8px}}
+nav a{{padding:6px 12px;color:#222;text-decoration:none;border-bottom:3px solid transparent}}
+nav a:hover{{background:#e0e0e0}}
+section{{padding:16px}}
+section{{display:none}}
+section:target,section.default{{display:block}}
+section:target~section.default{{display:none}}
+h2{{font-size:15px;font-weight:600;margin:0 0 8px}}
+.sheet{{background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.25);display:inline-block;max-width:100%}}
+</style></head><body>
+<header>{html.escape(title)}</header>
+<nav>{"".join(nav)}</nav>
+{"".join(sections[1:])}{sections[0] if sections else ""}
+</body></html>
+"""
+    atomic_write(path, doc.encode("utf-8"), private=False)
+
+
 def _page_layout(scene) -> QPageLayout:
     size = QPageSize(QSizeF(scene.page_w / PX_PER_MM, scene.page_h / PX_PER_MM),
                      QPageSize.Unit.Millimeter, scene.page_name,
@@ -136,8 +254,29 @@ def export_pdf(pages, path: str, title: str = "") -> None:
             painter.end()
 
 
-def print_pages(printer, pages) -> None:
-    """Imprime chaque page à l'échelle de la feuille (orientation automatique)."""
+def paper_px(scene, paper: str) -> tuple[float, float]:
+    """Taille de la feuille d'imprimante (px), dans l'orientation de la page de dessin."""
+    w, h = PAGE_SIZES.get(paper, PAGE_SIZES["A4"])
+    w, h = w * PX_PER_MM, h * PX_PER_MM
+    if (scene.page_w > scene.page_h) != (w > h):
+        w, h = h, w
+    return w, h
+
+
+def page_tiles(scene, paper: str) -> list[QRectF]:
+    """Découpage de la page de dessin en feuilles à 100 % (sauts de page de Visio)."""
+    pw, ph = paper_px(scene, paper)
+    cols = max(1, math.ceil(scene.page_w / pw - 1e-6))
+    rows = max(1, math.ceil(scene.page_h / ph - 1e-6))
+    return [QRectF(c * pw, r * ph, pw, ph) for r in range(rows) for c in range(cols)]
+
+
+def print_pages(printer, pages, tile: bool = False, paper: str = "A4") -> None:
+    """Imprime chaque page à l'échelle de la feuille (orientation automatique), ou, en mode
+    mosaïque, à 100 % sur autant de feuilles que nécessaire, comme Visio."""
+    if tile:
+        _print_tiled(printer, pages, paper)
+        return
     painter = None
     for i, scene in enumerate(pages):
         landscape = scene.page_w > scene.page_h
@@ -153,5 +292,32 @@ def print_pages(printer, pages) -> None:
         target.moveTo(0, 0)
         with exporting(scene):
             _render(scene, painter, target, scene.page_rect())
+    if painter is not None:
+        painter.end()
+
+
+def _print_tiled(printer, pages, paper: str) -> None:
+    w, h = PAGE_SIZES.get(paper, PAGE_SIZES["A4"])
+    printer.setPageSize(QPageSize(QSizeF(w, h), QPageSize.Unit.Millimeter, paper,
+                                  QPageSize.SizeMatchPolicy.FuzzyMatch))
+    printer.setFullPage(True)
+    painter = None
+    first = True
+    for scene in pages:
+        landscape = scene.page_w > scene.page_h
+        printer.setPageOrientation(QPageLayout.Orientation.Landscape if landscape
+                                   else QPageLayout.Orientation.Portrait)
+        for src in page_tiles(scene, paper):
+            if first:
+                painter = QPainter(printer)
+                if not painter.isActive():
+                    return
+                first = False
+            else:
+                printer.newPage()
+            k = printer.resolution() / 96.0
+            target = QRectF(0, 0, src.width() * k, src.height() * k)
+            with exporting(scene):
+                _render(scene, painter, target, src)
     if painter is not None:
         painter.end()

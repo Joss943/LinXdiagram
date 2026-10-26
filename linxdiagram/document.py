@@ -47,6 +47,8 @@ class Document(QObject):
             if p.editing_item is not None:
                 p.editing_item.finish_edit()
             p.clear_hover()
+            p.selected_port = None
+            p.update()
         self.toolChanged.emit(tool)
 
     def show_page(self, scene: DiagramScene) -> None:
@@ -64,6 +66,11 @@ class Document(QObject):
         self.pages.insert(index, scene)
         self.pagesChanged.emit()
         self.show_page(scene)
+
+    def set_page_order(self, order: list) -> None:
+        if sorted(map(id, order)) == sorted(map(id, self.pages)) and order != self.pages:
+            self.pages[:] = order
+            self.pagesChanged.emit()
 
     def take_page(self, scene: DiagramScene) -> None:
         if scene in self.pages and len(self.pages) > 1:

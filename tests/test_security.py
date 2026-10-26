@@ -1,8 +1,12 @@
 import json
 import os
 import stat
+import sys
 import tempfile
 import unittest
+
+POSIX_ONLY = unittest.skipIf(sys.platform.startswith("win"),
+                             "droits Unix, FIFO et /dev absents sous Windows")
 
 from linxdiagram import security
 
@@ -72,6 +76,7 @@ class FileTest(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
 
+    @POSIX_ONLY
     def test_atomic_write_private_by_default(self):
         p = os.path.join(self.dir, "a.lxd")
         security.atomic_write(p, b"hello")
@@ -83,6 +88,7 @@ class FileTest(unittest.TestCase):
             self.assertEqual(f.read(), b"world")
         self.assertEqual(os.listdir(self.dir), ["a.lxd"])
 
+    @POSIX_ONLY
     def test_read_limited_rejects_big_and_special_files(self):
         p = os.path.join(self.dir, "big")
         with open(p, "wb") as f:
@@ -96,6 +102,7 @@ class FileTest(unittest.TestCase):
         with self.assertRaises(security.SecurityError):
             security.read_file_limited("/dev/zero", 1000)
 
+    @POSIX_ONLY
     def test_private_dir(self):
         d = security.private_dir(os.path.join(self.dir, "priv"))
         self.assertEqual(stat.S_IMODE(os.stat(d).st_mode), 0o700)

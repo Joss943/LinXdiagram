@@ -11,9 +11,8 @@ import os
 from PyQt6.QtGui import QColor, QFont, QPalette
 from PyQt6.QtWidgets import QApplication
 
-from . import security
+from . import compat, security
 
-FONT_UI = "Inter"
 
 # Microsoft 365 / Office 2024 : accents plus vifs, surfaces claires et hiérarchie nette
 # entre barre de titre, onglets, ruban et espace de dessin.
@@ -45,15 +44,24 @@ T: dict[str, str] = dict(LIGHT)
 _dark = False
 
 
+def ui_font_family() -> str:
+    """Police de l'interface : Segoe UI sous Windows (celle d'Office), police système sous
+    macOS, Inter ailleurs. Une police absente serait remplacée par une police plus large qui
+    déborderait du ruban."""
+    from PyQt6.QtGui import QFontDatabase
+    families = set(QFontDatabase.families())
+    for fam in compat.ui_chrome_fonts():
+        if fam in families:
+            return fam
+    return QApplication.font().family()
+
+
 def is_dark() -> bool:
     return _dark
 
 
 def _asset_dir() -> str:
-    base = os.environ.get("XDG_RUNTIME_DIR")
-    if not base or not os.path.isdir(base):
-        base = os.path.join(os.path.expanduser("~"), ".cache")
-    return security.private_dir(os.path.join(base, "linxdiagram-ui"))
+    return security.private_dir(compat.runtime_dir())
 
 
 def _write_assets(t: dict) -> dict[str, str]:
@@ -88,7 +96,8 @@ def apply(app: QApplication, dark: bool) -> None:
     T.clear()
     T.update(DARK if dark else LIGHT)
     app.setStyle("Fusion")
-    font = QFont(FONT_UI)
+    family = ui_font_family()
+    font = QFont(family)
     font.setPixelSize(12)
     font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
     app.setFont(font)
@@ -111,7 +120,7 @@ def apply(app: QApplication, dark: bool) -> None:
     app.setStyleSheet(f"""
     /* Taille fixe comme dans Visio (9 pt) : sans cette règle, Qt reprend la taille du bureau
        (11 pt sous GNOME) pour tout widget stylé, et libellés et boutons débordent. */
-    * {{ font-family: "{FONT_UI}"; font-size: 12px; }}
+    * {{ font-family: "{family}"; font-size: 12px; }}
     QToolTip {{ background: {t['tooltip']}; color: {t['text']}; border: 1px solid {t['border']};
                padding: 6px 8px; }}
 

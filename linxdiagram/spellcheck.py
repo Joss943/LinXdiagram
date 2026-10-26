@@ -12,11 +12,44 @@ import ctypes
 import ctypes.util
 import os
 import re
+import sys
 
-from . import security
+from . import compat, security
 
-DICT_DIRS = ("/usr/share/hunspell", "/usr/share/myspell", "/usr/share/myspell/dicts",
-             "/app/share/hunspell")
+_LINUX_DICT_DIRS = ("/usr/share/hunspell", "/usr/share/myspell", "/usr/share/myspell/dicts",
+                    "/app/share/hunspell")
+
+
+def dict_dirs() -> list[str]:
+    """Dossiers de dictionnaires .aff/.dic selon le système. Sous Windows et macOS, on peut
+    aussi déposer les dictionnaires dans le dossier « dictionnaires » de l'application."""
+    out = [os.path.join(compat.data_dir(), "dictionnaires")]
+    if getattr(sys, "frozen", False):  # paquet autonome : dictionnaires livrés à côté
+        out.append(os.path.join(os.path.dirname(sys.executable), "dictionnaires"))
+    if compat.IS_MACOS:
+        out += [os.path.expanduser("~/Library/Spelling"), "/Library/Spelling",
+                "/opt/homebrew/share/hunspell", "/usr/local/share/hunspell"]
+    elif not compat.IS_WINDOWS:
+        out += list(_LINUX_DICT_DIRS)
+    return out
+
+
+def install_hint() -> str:
+    if compat.IS_WINDOWS or compat.IS_MACOS:
+        return ("Copiez les fichiers fr_FR.aff et fr_FR.dic (dictionnaires LibreOffice) dans :\n"
+                + os.path.join(compat.data_dir(), "dictionnaires"))
+    return "Installez par exemple le paquet « hunspell-fr » de votre distribution."
+
+
+def _lib_names() -> list[str]:
+    names = [ctypes.util.find_library("hunspell-1.7"), ctypes.util.find_library("hunspell")]
+    if compat.IS_WINDOWS:
+        names += ["libhunspell-1.7-0.dll", "libhunspell.dll", "hunspell.dll"]
+    elif compat.IS_MACOS:
+        names += ["/opt/homebrew/lib/libhunspell-1.7.dylib", "/usr/local/lib/libhunspell-1.7.dylib"]
+    else:
+        names += ["libhunspell-1.7.so.0", "libhunspell-1.6.so.0"]
+    return names
 LANGS = ("fr_FR", "fr_BE", "fr_CA", "fr_CH", "en_US", "en_GB")
 LANG_NAMES = {"fr": "Français", "en": "Anglais"}
 MAX_WORD = 100
@@ -26,9 +59,7 @@ _ELISIONS = ("l", "d", "j", "m", "n", "s", "t", "c", "qu", "jusqu", "lorsqu", "p
 
 
 def _load_lib():
-    names = [ctypes.util.find_library("hunspell-1.7"), ctypes.util.find_library("hunspell"),
-             "libhunspell-1.7.so.0", "libhunspell-1.6.so.0"]
-    for name in names:
+    for name in _lib_names():
         if not name:
             continue
         try:
@@ -54,7 +85,7 @@ def _load_lib():
 def find_dictionary(preferred: str = "fr_FR") -> tuple[str, str, str] | None:
     """(langue, chemin .aff, chemin .dic) du premier dictionnaire disponible."""
     for lang in (preferred,) + LANGS:
-        for d in DICT_DIRS:
+        for d in dict_dirs():
             aff, dic = os.path.join(d, lang + ".aff"), os.path.join(d, lang + ".dic")
             if os.path.isfile(aff) and os.path.isfile(dic):
                 return lang, aff, dic

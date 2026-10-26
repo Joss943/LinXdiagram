@@ -370,6 +370,40 @@ def _bullets(c):
 
 
 # =========================================================================== Outils
+def _text_lines(c, x0=12):
+    for y in (8, 13, 18, 23):
+        c.line(x0, y, 28, y, INK)
+
+
+@_reg("text_block")
+def _text_block(c):
+    c.rect(4, 7, 24, 18, fill=None, stroke=INK2)
+    c.rect(8, 11, 16, 10, fill=PAPER, stroke=GREEN)
+    c.text(8, 11, 16, 10, "A", 9, bold=True, color=INK)
+    for x, y in ((8, 11), (24, 11), (24, 21), (8, 21)):
+        c.rect(x - 1.5, y - 1.5, 3, 3, fill=PAPER, stroke=GREEN)
+
+
+@_reg("indent_more")
+def _indent_more(c):
+    _text_lines(c)
+    c.poly([(3, 11), (8, 15.5), (3, 20)], fill=BLUE, stroke=None)
+
+
+@_reg("indent_less")
+def _indent_less(c):
+    _text_lines(c)
+    c.poly([(8, 11), (3, 15.5), (8, 20)], fill=BLUE, stroke=None)
+
+
+@_reg("line_spacing")
+def _line_spacing(c):
+    _text_lines(c, 13)
+    c.line(6, 6, 6, 26, BLUE)
+    c.poly([(3, 9), (6, 5), (9, 9)], fill=BLUE, stroke=None)
+    c.poly([(3, 23), (6, 27), (9, 23)], fill=BLUE, stroke=None)
+
+
 @_reg("pointer", "tool_select")
 def _pointer(c):
     c.poly([(10, 3.5), (10, 25), (15, 20.5), (19, 28.5), (22.5, 27), (18.5, 19), (25, 19)],
@@ -730,6 +764,14 @@ def _page_dup(c):
 def _page_del(c):
     _page(c, 5, 3, 18, 25)
     _x_badge(c, 23, 23)
+
+
+@_reg("export_html")
+def _export_html(c):
+    c.rect(3, 5, 26, 22, fill=PAPER, stroke=INK)
+    c.rect(3, 5, 26, 5, fill=BLUE_L, stroke=INK)
+    c.ellipse(16, 19, 5, fill=None, stroke=BLUE)
+    c.line(11, 19, 21, 19, BLUE).line(16, 14, 16, 24, BLUE)
 
 
 @_reg("page_rename", "edit_text")

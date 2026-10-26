@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QColorDialog, QComboB
                              QListWidgetItem, QProgressBar, QSpinBox, QTableWidget,
                              QTableWidgetItem, QVBoxLayout)
 
-from . import security
+from . import compat, security
 from .fileformat import clean_shape_style, clean_text_style, normalize_status_key
 from .units import PX_PER_INCH
 
@@ -433,7 +433,7 @@ class OptionsDialog(QDialog):
             self.theme.addItem(label, key)
         self.theme.setCurrentIndex(max(0, self.theme.findData(settings.value("ui/theme", "light"))))
         self.native = QCheckBox("Utiliser la barre de titre du système")
-        self.native.setChecked(settings.value("ui/native_titlebar", False, type=bool))
+        self.native.setChecked(settings.value("ui/native_titlebar", compat.IS_MACOS, type=bool))
         form.addRow("Fenêtre", self.native)
         self.user = QLineEdit(settings.value("user/name", ""))
         self.user.setPlaceholderText("Nom affiché dans les commentaires")
@@ -471,6 +471,134 @@ def _buttons(dlg, ok_text: str = "OK") -> QDialogButtonBox:
     b.accepted.connect(dlg.accept)
     b.rejected.connect(dlg.reject)
     return b
+
+
+class RulerGridDialog(QDialog):
+    """Affichage > Règle et grille : espacement de la grille (et des déplacements au clavier)."""
+
+    PRESETS = (("Fin", 2.5), ("Normal", 5.0), ("Grossier", 10.0))
+
+    def __init__(self, parent, settings: dict):
+        super().__init__(parent)
+        from PyQt6.QtWidgets import QDoubleSpinBox
+        self.setWindowTitle("Règle et grille")
+        form = QFormLayout(self)
+        self.preset = QComboBox()
+        for name, mm in self.PRESETS:
+            self.preset.addItem(f"{name} ({mm:g} mm)".replace(".", ","), mm)
+        self.preset.addItem("Fixe (personnalisé)", None)
+        self.spacing = QDoubleSpinBox()
+        self.spacing.setRange(1.0, 100.0)
+        self.spacing.setDecimals(1)
+        self.spacing.setSuffix(" mm")
+        self.spacing.setValue(settings.get("grid_mm", 5.0))
+        idx = next((i for i, (_n, mm) in enumerate(self.PRESETS) if abs(mm - self.spacing.value()) < 1e-6),
+                   len(self.PRESETS))
+        self.preset.setCurrentIndex(idx)
+        self.spacing.setEnabled(idx == len(self.PRESETS))
+        self.preset.currentIndexChanged.connect(self._preset)
+        form.addRow("Espacement de la grille :", self.preset)
+        form.addRow("Espacement fixe :", self.spacing)
+        form.addRow(_buttons(self))
+
+    def _preset(self, i: int) -> None:
+        mm = self.preset.itemData(i)
+        self.spacing.setEnabled(mm is None)
+        if mm is not None:
+            self.spacing.setValue(mm)
+
+    def values(self) -> dict:
+        return {"grid_mm": float(self.spacing.value())}
+
+
+class SnapGlueDialog(QDialog):
+    """Affichage > Accrocher et coller, comme dans Visio."""
+
+    def __init__(self, parent, settings: dict):
+        super().__init__(parent)
+        from PyQt6.QtWidgets import QGroupBox, QSlider
+        self.setWindowTitle("Accrocher et coller")
+        lay = QVBoxLayout(self)
+        active = QGroupBox("Actuellement actif")
+        al = QVBoxLayout(active)
+        self.boxes: dict[str, QCheckBox] = {}
+
+        def box(layout, key, text, default=True):
+            cb = QCheckBox(text)
+            cb.setChecked(bool(settings.get(key, default)))
+            layout.addWidget(cb)
+            self.boxes[key] = cb
+        box(al, "snap", "Accrocher")
+        box(al, "glue", "Coller")
+        box(al, "guides", "Grille dynamique")
+        cols = QHBoxLayout()
+        snap = QGroupBox("Accrocher à")
+        sl = QVBoxLayout(snap)
+        box(sl, "snap_grid", "Grille")
+        box(sl, "snap_ruler_guides", "Repères")
+        glue = QGroupBox("Coller à")
+        gl = QVBoxLayout(glue)
+        box(gl, "glue_ports", "Points de connexion")
+        box(gl, "glue_shapes", "Géométrie de la forme (collage dynamique)")
+        cols.addWidget(snap)
+        cols.addWidget(glue)
+        lay.addWidget(active)
+        lay.addLayout(cols)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Force d'accrochage :"))
+        self.strength = QSlider(Qt.Orientation.Horizontal)
+        self.strength.setRange(2, 30)
+        self.strength.setValue(int(settings.get("snap_tol", 7)))
+        self.strength_label = QLabel()
+        self.strength.valueChanged.connect(lambda v: self.strength_label.setText(f"{v} pixels"))
+        self.strength_label.setText(f"{self.strength.value()} pixels")
+        row.addWidget(self.strength, 1)
+        row.addWidget(self.strength_label)
+        lay.addLayout(row)
+        lay.addWidget(_buttons(self))
+
+    def values(self) -> dict:
+        out = {k: cb.isChecked() for k, cb in self.boxes.items()}
+        out["snap_tol"] = self.strength.value()
+        return out
+
+
+class ReorderPagesDialog(QDialog):
+    """« Réorganiser les pages » de Visio : glisser les pages ou utiliser Monter / Descendre."""
+
+    def __init__(self, parent, pages):
+        super().__init__(parent)
+        self.setWindowTitle("Réorganiser les pages")
+        self._pages = list(pages)
+        lay = QHBoxLayout(self)
+        self.list = QListWidget()
+        self.list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        for i, p in enumerate(self._pages):
+            it = QListWidgetItem(p.page_name)
+            it.setData(Qt.ItemDataRole.UserRole, i)
+            self.list.addItem(it)
+        self.list.setCurrentRow(0)
+        lay.addWidget(self.list)
+        side = QVBoxLayout()
+        for text, step in (("Monter", -1), ("Descendre", 1)):
+            b = QPushButton(text)
+            b.clicked.connect(lambda _=False, d=step: self.move(d))
+            side.addWidget(b)
+        side.addStretch(1)
+        side.addWidget(_buttons(self))
+        lay.addLayout(side)
+
+    def move(self, step: int) -> None:
+        row = self.list.currentRow()
+        dst = row + step
+        if row < 0 or not 0 <= dst < self.list.count():
+            return
+        it = self.list.takeItem(row)
+        self.list.insertItem(dst, it)
+        self.list.setCurrentRow(dst)
+
+    def order(self) -> list:
+        return [self._pages[self.list.item(i).data(Qt.ItemDataRole.UserRole)] for i in range(self.list.count())]
 
 
 class ZoomDialog(QDialog):

@@ -30,7 +30,9 @@ class CommandSearch(QLineEdit):
         self.win = window
         self.setObjectName("CommandSearch")
         self.setPlaceholderText("Rechercher (Alt+Q)")
-        self.setFixedWidth(320)
+        # 320 px comme Office, mais la zone rétrécit sur un petit écran au lieu d'élargir la fenêtre.
+        self.setMinimumWidth(140)
+        self.setMaximumWidth(320)
         self.setClearButtonEnabled(True)
         self.addAction(icons.icon("search", "#ffffff"), QLineEdit.ActionPosition.LeadingPosition)
         self.model = QStandardItemModel(self)

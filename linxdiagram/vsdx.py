@@ -31,7 +31,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPainterPath
 
 from . import APP_NAME, __version__, fields, fileformat, security, stencils, swimlanes
-from .units import PX_PER_INCH
+from .units import INDENT_PX, PX_PER_INCH
 
 VNS = "http://schemas.microsoft.com/office/visio/2012/main"
 RNS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -801,11 +801,22 @@ class _Importer:
             "bold": bool(style_bits & 1), "italic": bool(style_bits & 2),
             "underline": bool(style_bits & 4),
             "color": _color(sheet.row_cell("Character", "Color")) or "#000000",
-            "halign": ("left", "center", "right", "center")[min(max(halign, 0), 3)],
+            "halign": ("left", "center", "right", "justify")[min(max(halign, 0), 3)],
             "valign": ("top", "middle", "bottom")[min(max(valign, 0), 2)],
         }
         if font:
             out["font"] = font
+        bullet = int(_num(sheet.row_cell("Paragraph", "Bullet"), 0) or 0)
+        if bullet:
+            out["bullets"] = True
+        ind_left = _num(sheet.row_cell("Paragraph", "IndLeft"), 0.0) or 0.0
+        if bullet:
+            ind_left -= 0.25
+        if ind_left > 0.01:
+            out["indent"] = min(fileformat.MAX_INDENT, round(ind_left * PX_PER_INCH / INDENT_PX))
+        sp = _num(sheet.row_cell("Paragraph", "SpLine"), None)
+        if sp is not None and sp < 0:
+            out["spacing"] = min(3.0, max(0.5, -sp))
         return out
 
     def _line_style(self, sheet: _Sheet) -> dict:
@@ -916,6 +927,17 @@ class _Importer:
             left = (tpx - tlx) / W
             top = 1.0 - (tpy - tly + th) / H
             st["text_rect"] = [left, top, tw / W, th / H]
+        # Points de connexion propres à la forme (ajoutés avec l'outil Point de connexion).
+        conn_rows = sheet.named_rows("Connection")
+        if conn_rows and W > 0 and H > 0:
+            ports = []
+            for _key, cells in conn_rows[:fileformat.MAX_PORTS]:
+                x, y = _num(cells.get("X"), None), _num(cells.get("Y"), None)
+                if x is not None and y is not None:
+                    ports.append([round(x / W, 6), round(1.0 - y / H, 6)])
+            default = [list(p) for p in stencils.get(st["type"]).ports]
+            if ports and not _same_points(ports, default):
+                st["ports"] = ports
         page["shapes"].append(st)
 
     def _foreign_image(self, elem) -> str:
@@ -979,6 +1001,10 @@ class _Importer:
               "text_style": ts, "data": self._data(sheet)}
         self.conn_states[elem.get("ID")] = st
         page["connectors"].append(st)
+
+
+def _same_points(a: list, b: list, tol: float = 1e-3) -> bool:
+    return len(a) == len(b) and all(abs(p[0] - q[0]) < tol and abs(p[1] - q[1]) < tol for p, q in zip(a, b))
 
 
 def import_vsdx(path: str) -> tuple[dict, list[str]]:
@@ -1149,7 +1175,18 @@ def _text_cells(shape_el, ts: dict, fonts: dict) -> None:
     _cell(row, "Size", ts["size"] / 72.0, "PT")
     sec = _el(shape_el, "Section", N="Paragraph")
     row = _el(sec, "Row", IX="0")
-    _cell(row, "HorzAlign", {"left": 0, "center": 1, "right": 2}[ts["halign"]])
+    _cell(row, "HorzAlign", {"left": 0, "center": 1, "right": 2, "justify": 3}[ts["halign"]])
+    # Retrait (pouces), interligne en pourcentage (valeur négative dans Visio) et puces.
+    # Une puce ajoute, comme dans Visio, un retrait suspendu de 0,25 pouce.
+    ind_left = ts.get("indent", 0) * INDENT_PX / PX_PER_INCH + (0.25 if ts.get("bullets") else 0.0)
+    if ind_left:
+        _cell(row, "IndLeft", ind_left, "IN")
+    if abs(ts.get("spacing", 1.0) - 1.0) > 1e-6:
+        _cell(row, "SpLine", -ts["spacing"])
+    if ts.get("bullets"):
+        _cell(row, "Bullet", 1)
+        _cell(row, "BulletStr", "•", "STR")
+        _cell(row, "IndFirst", -0.25, "IN")
 
 
 def _data_sections(shape_el, data: dict, link: str, type_id: str | None, container: bool = False,
@@ -1354,9 +1391,9 @@ def _page_xml(scene, images: list[tuple[str, bytes]], fonts: dict) -> tuple[byte
                 _cell(el, "ImgWidth", W)
                 _cell(el, "ImgHeight", H)
             _text_cells(el, st["text_style"], fonts)
-            if sdef.ports:
+            if it.ports:
                 sec = _el(el, "Section", N="Connection")
-                for i, (nx, ny) in enumerate(sdef.ports):
+                for i, (nx, ny) in enumerate(it.ports):
                     row = _el(sec, "Row", IX=str(i))
                     _cell(row, "X", nx * W, None, f"Width*{_f(nx)}")
                     _cell(row, "Y", (1 - ny) * H, None, f"Height*{_f(1 - ny)}")

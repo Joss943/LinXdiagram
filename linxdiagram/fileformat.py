@@ -23,7 +23,7 @@ from typing import Callable
 
 from . import FILE_EXT, __version__, APP_NAME
 from . import security, stencils
-from .units import (ARROWS, DASHES, HALIGNS, MAX_COORD_PX, PAGE_SIZES, ROUTES, THEMES,
+from .units import (ARROWS, DASHES, GRID_MM, HALIGNS, MAX_COORD_PX, PAGE_SIZES, ROUTES, THEMES,
                     VALIGNS, DEFAULT_PAGE, DEFAULT_THEME, connector_style, connector_text_style,
                     mm_to_px, shape_style, text_style)
 
@@ -40,6 +40,8 @@ MAX_DATA_FIELDS = 100
 MAX_DATA_LINKS_PER_SHAPE = 10
 MAX_IMAGE_BYTES = 16 * 1024 * 1024
 MAX_PATH_COMMANDS = 20_000
+MAX_INDENT = 8
+MAX_PORTS = 64
 
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
@@ -131,6 +133,9 @@ def clean_text_style(raw, base: dict) -> dict:
         "color": _color(raw.get("color"), base["color"], allow_none=False),
         "halign": _choice(raw.get("halign"), HALIGNS, base["halign"]),
         "valign": _choice(raw.get("valign"), VALIGNS, base["valign"]),
+        "bullets": _bool(raw.get("bullets"), base.get("bullets", False)),
+        "indent": _int(raw.get("indent"), 0, MAX_INDENT, base.get("indent", 0)),
+        "spacing": _num(raw.get("spacing"), 0.5, 3.0, base.get("spacing", 1.0)),
     }
 
 
@@ -398,6 +403,15 @@ def clean_shape(raw, theme: str) -> dict | None:
         shape["image"] = clean_image(raw.get("image"))
     if type_id == "special.custom":
         shape["path"] = clean_path(raw.get("path"))
+    ports = raw.get("ports")
+    if isinstance(ports, list):
+        clean = []
+        for p in ports[:MAX_PORTS]:
+            if isinstance(p, list) and len(p) == 2:
+                vals = [_num(v, -0.5, 1.5, float("nan")) for v in p]
+                if not any(math.isnan(v) for v in vals):
+                    clean.append(vals)
+        shape["ports"] = clean
     tr = raw.get("text_rect")
     if isinstance(tr, list) and len(tr) == 4:
         vals = [_num(v, -10, 10, float("nan")) for v in tr]
@@ -487,6 +501,17 @@ def clean_settings(raw) -> dict:
         "theme": _choice(raw.get("theme"), tuple(THEMES), DEFAULT_THEME),
         "line_jumps": _bool(raw.get("line_jumps"), True),
         "variant": _choice(raw.get("variant"), ("standard", "outline", "light", "dark"), "standard"),
+        # Affichage > Règle et grille, Accrocher et coller (comme dans Visio).
+        "grid_mm": _num(raw.get("grid_mm"), 1.0, 100.0, GRID_MM),
+        "snap_tol": _int(raw.get("snap_tol"), 2, 30, 7),
+        "snap_grid": _bool(raw.get("snap_grid"), True),
+        "snap_ruler_guides": _bool(raw.get("snap_ruler_guides"), True),
+        "glue": _bool(raw.get("glue"), True),
+        "glue_ports": _bool(raw.get("glue_ports"), True),
+        "glue_shapes": _bool(raw.get("glue_shapes"), True),
+        "page_breaks": _bool(raw.get("page_breaks"), False),
+        "print_tile": _bool(raw.get("print_tile"), False),
+        "paper": _choice(raw.get("paper"), tuple(PAGE_SIZES), "A4"),
     }
 
 
