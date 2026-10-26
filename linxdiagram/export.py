@@ -111,6 +111,58 @@ def export_svg(scene, path: str, mode: str = "page") -> None:
             p.end()
 
 
+@contextlib.contextmanager
+def only_items(scene, items):
+    """Rendu limité à ``items`` (copie de la sélection) : les autres objets, la page et
+    son arrière-plan sont masqués le temps du rendu."""
+    keep = set(map(id, items))
+    hidden = [it for it in scene.all_items() if id(it) not in keep and it.isVisible()]
+    for it in hidden:
+        it.setVisible(False)
+    backpage = getattr(scene, "backpage", None)
+    if backpage is not None:
+        scene.backpage = ""
+    try:
+        with exporting(scene, transparent=True):
+            yield
+    finally:
+        if backpage is not None:
+            scene.backpage = backpage
+        for it in hidden:
+            it.setVisible(True)
+
+
+def selection_clipboard(scene, scale: float = 2.0) -> tuple[QImage, bytes] | None:
+    """Image PNG (fond transparent) et SVG de la sélection, pour coller dans une autre
+    application (traitement de texte, présentation, courriel), comme le fait Visio."""
+    items = scene.selected_all()
+    src = source_rect(scene, "selection")
+    if not items or src.isEmpty():
+        return None
+    w, h = math.ceil(src.width() * scale), math.ceil(src.height() * scale)
+    if w > MAX_IMAGE_SIDE or h > MAX_IMAGE_SIDE or w * h > MAX_IMAGE_PIXELS:
+        return None
+    img = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
+    img.fill(QColor(0, 0, 0, 0))
+    data = QByteArray()
+    buf = QBuffer(data)
+    buf.open(QIODevice.OpenModeFlag.WriteOnly)
+    gen = QSvgGenerator()
+    gen.setOutputDevice(buf)
+    gen.setSize(QSize(math.ceil(src.width()), math.ceil(src.height())))
+    gen.setViewBox(QRectF(0, 0, src.width(), src.height()))
+    gen.setResolution(96)
+    with only_items(scene, items):
+        p = QPainter(img)
+        _render(scene, p, QRectF(0, 0, w, h), src)
+        p.end()
+        p = QPainter(gen)
+        _render(scene, p, QRectF(0, 0, src.width(), src.height()), src)
+        p.end()
+    buf.close()
+    return img, bytes(data)
+
+
 def svg_bytes(scene, mode: str = "page") -> bytes:
     """Rendu SVG d'une page en mémoire."""
     src = source_rect(scene, mode)

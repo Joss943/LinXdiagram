@@ -10,8 +10,8 @@ import math
 import os
 import unicodedata
 
-from PyQt6.QtCore import (QBuffer, QIODevice, QMimeData, QPoint, QPointF, QRectF, QSize, Qt, QTimer,
-                          QUrl)
+from PyQt6.QtCore import (QBuffer, QEvent, QIODevice, QMimeData, QPoint, QPointF, QRectF, QSize, Qt,
+                          QTimer, QUrl)
 from PyQt6.QtGui import (QAction, QActionGroup, QColor, QDesktopServices, QFont, QIcon, QKeySequence,
                          QPainter, QPen, QPixmap)
 from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, QFileDialog,
@@ -242,6 +242,8 @@ class MainWindow(QMainWindow):
         A("cut", "Couper", "cut", SK.Cut, self.cut)
         A("copy", "Copier", "copy", SK.Copy, self.copy)
         A("paste", "Coller", "paste", SK.Paste, self.paste)
+        A("paste_special", "Collage spécial…", "paste", "Ctrl+Alt+V", self.paste_special,
+          tip="Choisit le format à coller : formes, image ou texte sans mise en forme.")
         A("duplicate", "Dupliquer", "duplicate", "Ctrl+D", self.duplicate)
         A("delete", "Supprimer", "delete", [QKeySequence(Qt.Key.Key_Delete)], self.delete)
         A("select_all", "Tout sélectionner", "select_all", SK.SelectAll, self._sc(lambda s: s.select_all()))
@@ -420,6 +422,12 @@ class MainWindow(QMainWindow):
         A("presentation", "Plein écran", "presentation", "F5", self.start_presentation,
           tip="Affiche les pages en plein écran (flèches pour naviguer, Échap pour quitter).")
         A("rulers", "Règle", None, None, self.toggle_rulers, checkable=True)
+        A("ruler_guides", "Repères", None, None, self.toggle_ruler_guides, checkable=True,
+          tip="Affiche les repères tirés depuis les règles et l'accrochage à ces repères.")
+        A("arrange_all", "Réorganiser tout", "new_window", None, self.arrange_windows,
+          tip="Place toutes les fenêtres LinXdiagram côte à côte.")
+        A("cascade", "Cascade", "new_window", None, self.cascade_windows,
+          tip="Superpose les fenêtres en les décalant.")
         A("grid", "Grille", None, None, lambda on: self._view_setting("grid", on), checkable=True)
         A("guides", "Grille dynamique", None, None, lambda on: self._view_setting("guides", on), checkable=True)
         A("snap", "Magnétisme", None, None, lambda on: self._view_setting("snap", on), checkable=True)
@@ -618,8 +626,11 @@ class MainWindow(QMainWindow):
         # ======================================================= Accueil
         home = self.ribbon.add_page("Accueil")
         g = RibbonGroup("Presse-papiers")
-        g.large(a["paste"])
-        g.column(a["cut"], a["copy"], R(a["format_painter"], SMALL, text="Reproduire la mise en forme"))
+        g.large(a["paste"], menu=self._menu(a["paste"], a["paste_special"]), split=True)
+        painter_btn = R(a["format_painter"], SMALL, text="Reproduire la mise en forme")
+        painter_btn.installEventFilter(self)
+        self._painter_btn = painter_btn
+        g.column(a["cut"], a["copy"], painter_btn)
         home.addWidget(g)
 
         g = RibbonGroup("Police", self.show_text_format, "Format du texte (police, alignement…)")
@@ -934,7 +945,7 @@ class MainWindow(QMainWindow):
         g.large(a["pane_drawing"])
         view.addWidget(g)
         g = RibbonGroup("Afficher")
-        g.column(self._check(a["rulers"]), self._check(a["grid"]))
+        g.column(self._check(a["rulers"]), self._check(a["grid"]), self._check(a["ruler_guides"]))
         view.addWidget(g)
         g = RibbonGroup("Aide visuelle")
         g.column(self._check(a["guides"]), self._check(a["autoconnect"]), self._check(a["ports"]))
@@ -947,6 +958,10 @@ class MainWindow(QMainWindow):
         view.addWidget(g)
         g = RibbonGroup("Fenêtre")
         g.large(a["new_window"])
+        self.switch_menu = QMenu(self)
+        self.switch_menu.aboutToShow.connect(self._fill_switch_menu)
+        g.column(a["arrange_all"], a["cascade"],
+                 R(None, SMALL, text="Changer de fenêtre", icon_name="new_window", menu=self.switch_menu))
         panes_menu = self._menu(a["show_shapes"], *[a[f"pane_{k}"] for k, _t, _i in PANES])
         g.large(None, text="Volets des tâches", icon_name="task_panes", menu=panes_menu)
         view.addWidget(g)
@@ -1219,6 +1234,10 @@ class MainWindow(QMainWindow):
         rulers = self.settings.value("view/rulers", True, type=bool)
         self.a["rulers"].setChecked(rulers)
         self.canvas.set_rulers_visible(rulers)
+        guides = self.settings.value("view/ruler_guides", True, type=bool)
+        self.a["ruler_guides"].setChecked(guides)
+        from .scene import DiagramScene
+        DiagramScene.show_ruler_guides = guides
         self.a["line_jumps"].setChecked(s.get("line_jumps", True))
 
     def _pages_changed(self) -> None:
@@ -1513,6 +1532,11 @@ class MainWindow(QMainWindow):
         md = QMimeData()
         md.setData(CLIP_MIME, data)
         md.setText("\n".join(i.text for i in sc.selected_all() if i.text))
+        # Image et SVG : la sélection se colle aussi dans LibreOffice, GIMP ou un courriel.
+        picture = export.selection_clipboard(sc)
+        if picture is not None:
+            md.setImageData(picture[0])
+            md.setData("image/svg+xml", picture[1])
         QApplication.clipboard().setMimeData(md)
         self._paste_count = 0
 
@@ -1544,6 +1568,43 @@ class MainWindow(QMainWindow):
             st["h"] = max(st["h"], mm_to_px(6) * (text.count("\n") + 1))
             sc.add_states([st], "Coller du texte")
 
+    def paste_special(self) -> None:
+        """Accueil > Coller > Collage spécial : choix du format parmi ceux du presse-papiers."""
+        md = QApplication.clipboard().mimeData()
+        sc = self.scene()
+        if md is None or sc is None:
+            return
+        choices = []
+        if md.hasFormat(CLIP_MIME):
+            choices.append(("shapes", f"Formes {APP_NAME}"))
+        if md.hasImage():
+            choices.append(("image", "Image (PNG)"))
+        if md.hasText() and md.text().strip():
+            choices.append(("text", "Texte non mis en forme"))
+        if not choices:
+            self.statusBar().showMessage("Le presse-papiers ne contient rien à coller.", 4000)
+            return
+        label, ok = QInputDialog.getItem(self, "Collage spécial", "Coller en tant que :",
+                                         [c[1] for c in choices], 0, False)
+        if not ok:
+            return
+        kind = next(k for k, t in choices if t == label)
+        if kind == "shapes":
+            self.paste()
+        elif kind == "image":
+            img = md.imageData()
+            if img is not None and not img.isNull():
+                buf = QBuffer()
+                buf.open(QIODevice.OpenModeFlag.WriteOnly)
+                img.save(buf, "PNG")
+                self._insert_image_bytes(bytes(buf.data()), self._view_center())
+        else:
+            text = security.clean_text(md.text(), fileformat.MAX_TEXT)
+            st = sc.new_shape_state("basic.text", self._view_center())
+            st["text"] = text
+            st["h"] = max(st["h"], mm_to_px(6) * (text.count("\n") + 1))
+            sc.add_states([st], "Coller du texte")
+
     def duplicate(self) -> None:
         sc = self.scene()
         data = sc.copy_selection() if sc else None
@@ -1566,6 +1627,20 @@ class MainWindow(QMainWindow):
         sc = self.scene()
         if sc is not None and sc.single_selected is not None:
             sc.single_selected.start_edit()
+
+    def format_painter_sticky(self) -> None:
+        sc = self.scene()
+        if sc is None or sc.single_selected is None:
+            self.statusBar().showMessage("Sélectionnez d'abord la forme dont copier la mise en forme.", 5000)
+            return
+        act = self.a["format_painter"]
+        if not act.isChecked():
+            act.setChecked(True)
+        if sc.format_painter is None:
+            self.format_painter(True)
+        if sc.format_painter is not None:
+            sc.format_painter["sticky"] = True
+            self.statusBar().showMessage("Cliquez sur les formes à mettre en forme ; Échap pour terminer.")
 
     def format_painter(self, on: bool) -> None:
         sc = self.scene()
@@ -2648,6 +2723,54 @@ class MainWindow(QMainWindow):
         if self.doc is not None:
             self.doc.apply_settings({key: on})
 
+    def toggle_ruler_guides(self, on: bool) -> None:
+        self.settings.setValue("view/ruler_guides", on)
+        from .scene import DiagramScene
+        DiagramScene.show_ruler_guides = on
+        for w in self.ctx.windows:
+            if w is not self and w.a["ruler_guides"].isChecked() != on:
+                w.a["ruler_guides"].setChecked(on)
+            if w.doc is not None:
+                for p in w.doc.pages:
+                    p.update()
+
+    # ------------------------------------------------------------------ fenêtres
+    def _fill_switch_menu(self) -> None:
+        self.switch_menu.clear()
+        for i, w in enumerate(self.ctx.windows, start=1):
+            act = self.switch_menu.addAction(f"{i} {w.doc_title()}")
+            act.setCheckable(True)
+            act.setChecked(w is self)
+            act.triggered.connect(lambda _=False, win=w: (win.showNormal() if win.isMinimized() else None,
+                                                          win.raise_(), win.activateWindow()))
+
+    def _screen_area(self):
+        screen = self.screen() or QApplication.primaryScreen()
+        return screen.availableGeometry()
+
+    def arrange_windows(self) -> None:
+        """Affichage > Réorganiser tout : fenêtres côte à côte sur l'écran."""
+        wins = [w for w in self.ctx.windows if w.isVisible()]
+        if not wins:
+            return
+        area = self._screen_area()
+        cols = 1 if len(wins) == 1 else 2 if len(wins) <= 4 else 3
+        rows = -(-len(wins) // cols)
+        cw, ch = area.width() // cols, area.height() // rows
+        for i, w in enumerate(wins):
+            w.showNormal()
+            w.setGeometry(area.x() + (i % cols) * cw, area.y() + (i // cols) * ch, cw, ch)
+
+    def cascade_windows(self) -> None:
+        wins = [w for w in self.ctx.windows if w.isVisible()]
+        area = self._screen_area()
+        w0, h0 = int(area.width() * 0.7), int(area.height() * 0.75)
+        for i, w in enumerate(wins):
+            w.showNormal()
+            off = (i % 10) * 32
+            w.setGeometry(area.x() + off, area.y() + off, w0, h0)
+            w.raise_()
+
     def toggle_rulers(self, on: bool) -> None:
         self.settings.setValue("view/rulers", on)
         self.canvas.set_rulers_visible(on)
@@ -2742,6 +2865,13 @@ class MainWindow(QMainWindow):
             self.quick_popup.hide()
 
     def eventFilter(self, obj, ev):  # noqa: N802
+        # Double-clic sur « Reproduire la mise en forme » : le pinceau reste actif (Office).
+        if obj is getattr(self, "_painter_btn", None) and ev.type() == QEvent.Type.MouseButtonDblClick:
+            self.format_painter_sticky()
+            return True
+        quick = getattr(self, "quick_popup", None)
+        if quick is None:
+            return super().eventFilter(obj, ev)
         if obj is self.quick_popup and ev.type() == ev.Type.Leave:
             self._quick_hide.start(300)
         elif obj is self.quick_popup and ev.type() == ev.Type.Enter:

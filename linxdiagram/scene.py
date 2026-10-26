@@ -71,6 +71,7 @@ def _simplify(pts: list, eps: float) -> list:
 class DiagramScene(QGraphicsScene):
     selectionInfo = pyqtSignal()
     autoconnectHover = pyqtSignal(object, int, QPointF)
+    show_ruler_guides = True  # Affichage > Repères (réglage de l'application, pas du document)
 
     def __init__(self, doc, page: dict):
         super().__init__()
@@ -444,7 +445,7 @@ class DiagramScene(QGraphicsScene):
                     painter.drawEllipse(self._draw["rect"])
                 else:
                     painter.drawRect(self._draw["rect"])
-        if self.ruler_guides or self.guide_preview is not None:
+        if self.show_ruler_guides and (self.ruler_guides or self.guide_preview is not None):
             self._paint_ruler_guides(painter, rect)
         if self.guides:
             painter.setPen(QPen(GUIDE, 1 / s, Qt.PenStyle.DashLine))
@@ -659,8 +660,9 @@ class DiagramScene(QGraphicsScene):
             item = self.top_item_at(pos)
             if item is not None:
                 self.apply_format(item, self.format_painter)
-            self.format_painter = None
-            self.doc.formatPainterDone.emit()
+            if not self.format_painter.get("sticky"):  # double-clic : reste actif, comme Office
+                self.format_painter = None
+                self.doc.formatPainterDone.emit()
             event.accept()
             return
         if tool == "select" and self.hover_shape is not None:
@@ -669,7 +671,7 @@ class DiagramScene(QGraphicsScene):
                 self.autoconnect(self.hover_shape, d)
                 event.accept()
                 return
-        if tool == "select" and self.ruler_guides:
+        if tool == "select" and self.ruler_guides and self.show_ruler_guides:
             gi = self.guide_at(pos)
             if gi is not None and self.top_item_at(pos) is None:
                 self.clearSelection()
@@ -862,6 +864,11 @@ class DiagramScene(QGraphicsScene):
             self._press_states = None
             prefer = self._carry_anchor[0] if self._carry_anchor else None
             self._carry, self._carry_anchor = {}, None
+            if after and event.modifiers() & Qt.KeyboardModifier.ControlModifier \
+                    and self._duplicate_drag(before, after):
+                self.update_scene_rect()
+                self.selection_info_changed()
+                return
             if after:
                 cff = any(isinstance(self._items.get(k), ShapeItem) and self._items[k].sdef.cff for k in after)
                 if cff:
@@ -873,6 +880,33 @@ class DiagramScene(QGraphicsScene):
                 self.update_scene_rect()
                 self.maybe_auto_size()
         self.selection_info_changed()
+
+    def _duplicate_drag(self, before: dict, after: dict) -> bool:
+        """Ctrl + glisser : comme dans Visio, les formes déplacées restent en place et une copie
+        est déposée à l'endroit visé. Ne s'applique qu'à un simple déplacement."""
+        delta = None
+        for k, b in before.items():
+            a = after[k]
+            if b.get("kind") == "connector":
+                continue
+            if any(a[key] != b[key] for key in ("w", "h", "rotation", "flip_h", "flip_v")):
+                return False
+            d = (a["x"] - b["x"], a["y"] - b["y"])
+            if delta is None:
+                delta = d
+            elif abs(d[0] - delta[0]) > 0.01 or abs(d[1] - delta[1]) > 0.01:
+                return False
+            if self._items[k].sdef.cff:
+                return False
+        if delta is None or (abs(delta[0]) < 0.01 and abs(delta[1]) < 0.01):
+            return False
+        for st in _shapes_first(before.values()):
+            self._items[st["id"]].set_state(st)
+        self.refresh_connectors()
+        data = self.copy_selection()
+        if data:
+            self.paste(data, QPointF(*delta), "Dupliquer")
+        return True
 
     def maybe_auto_size(self) -> None:
         """« Taille automatique » : la page s'agrandit pour contenir le dessin."""
@@ -1007,7 +1041,7 @@ class DiagramScene(QGraphicsScene):
                         d = vy - y
                         if abs(d) <= tol and (adj_y is None or abs(d) < abs(adj_y)):
                             adj_y, hit_y = d, (vy, ob)
-        if self.ruler_guides:
+        if self.ruler_guides and self.show_ruler_guides:
             tol = GUIDE_TOL_PX / s
             for gd in self.ruler_guides:
                 refs = (box.left(), box.center().x(), box.right()) if gd["o"] == "v" else \
