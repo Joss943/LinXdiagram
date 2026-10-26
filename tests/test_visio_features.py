@@ -36,7 +36,8 @@ class VisioFeaturesTest(unittest.TestCase):
         tabs = [t for t, b in self.w.ribbon.tab_buttons.items() if not b.isHidden()]
         self.assertEqual(tabs, ["Accueil", "Insertion", "Création", "Données", "Processus", "Révision",
                                 "Affichage", "Développeur", "Aide"])
-        self.assertIsNotNone(self.w.titlebar)
+        if not self.w.native_frame:  # barre de titre native par défaut sous macOS
+            self.assertIsNotNone(self.w.titlebar)
 
     def test_quick_style_and_undo(self):
         s = self.sc.item_by_id("s2")

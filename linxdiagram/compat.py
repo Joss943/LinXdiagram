@@ -137,6 +137,15 @@ def pid_alive(pid: int) -> bool:
     return True
 
 
+def ui_chrome_fonts() -> tuple[str, ...]:
+    """Polices du ruban et des volets, par ordre de préférence."""
+    if IS_WINDOWS:
+        return ("Segoe UI", "Inter", "Arial")
+    if IS_MACOS:
+        return (".AppleSystemUIFont", "Helvetica Neue", "Inter", "Helvetica")
+    return ("Inter", "Noto Sans", "Cantarell", "DejaVu Sans", "Liberation Sans")
+
+
 def ui_font_candidates() -> tuple[str, ...]:
     """Polices d'interface proches de Calibri / Segoe UI selon le système."""
     common = ("Calibri", "Carlito")
