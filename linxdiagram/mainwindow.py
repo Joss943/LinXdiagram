@@ -1000,9 +1000,42 @@ class MainWindow(QMainWindow):
             p.end()
             act = m.addAction(f"{w:g} pt")
             act.setIcon(QIcon(pm))
-            act.triggered.connect(lambda _=False, v=w: self._sc(
-                lambda s: s.apply_line_to_selection({"line_width": v * 96 / 72}, "Épaisseur du trait"))())
+            act.setCheckable(True)
+            act.setData(w)
+            act.triggered.connect(lambda _=False, v=w: self.set_line_weight(v))
+        m.addSeparator()
+        m.addAction("Autres épaisseurs…", self.custom_line_weight)
+        m.aboutToShow.connect(lambda menu=m: self._check_current_weight(menu))
         return m
+
+    def _current_line_weight(self) -> float | None:
+        """Épaisseur (pt) de l'objet sélectionné, connecteur compris."""
+        sc = self.scene()
+        sel = sc.selected_all() if sc is not None else []
+        return sel[0].style["line_width"] * 72 / 96 if sel else None
+
+    def _check_current_weight(self, menu: QMenu) -> None:
+        cur = self._current_line_weight()
+        for act in menu.actions():
+            if act.isCheckable():
+                act.setChecked(cur is not None and abs(act.data() - cur) < 0.01)
+
+    def set_line_weight(self, points: float) -> None:
+        """Épaisseur du trait des formes et des connecteurs sélectionnés, en points."""
+        sc = self.scene()
+        if sc is None:
+            return
+        if not sc.selected_all():
+            self.statusBar().showMessage("Sélectionnez une forme ou un connecteur.", 4000)
+            return
+        sc.apply_line_to_selection({"line_width": points * 96 / 72}, "Épaisseur du trait")
+
+    def custom_line_weight(self) -> None:
+        cur = self._current_line_weight()
+        value, ok = QInputDialog.getDouble(self, "Épaisseur du trait", "Épaisseur (pt) :",
+                                           cur if cur is not None else 0.75, 0.25, 36.0, 2)
+        if ok:
+            self.set_line_weight(value)
 
     def _dash_menu(self) -> QMenu:
         m = QMenu("Tirets", self)
@@ -2751,6 +2784,13 @@ class MainWindow(QMainWindow):
         line = self._color_button("line_color", "Trait", self.line_btn.current,
                                   lambda c: (menu.close(), self._sc(lambda s: s.apply_line_to_selection({"line": c}))()),
                                   none_label="Aucun trait", kind=ICON)
+        # Comme la mini-barre de Visio : le bouton Trait propose aussi épaisseur, tirets et flèches.
+        line_menu = line.menu()
+        line_menu.addSeparator()
+        line_menu.addMenu(self._weight_menu())
+        line_menu.addMenu(self._dash_menu())
+        if any(isinstance(i, ConnectorItem) for i in sel):
+            line_menu.addMenu(self._arrow_menu())
         lay.addWidget(fill, 1, 5)
         lay.addWidget(line, 1, 6)
         lay.addWidget(RibbonButton(self.a["format_painter"], ICON), 1, 7)
@@ -2826,6 +2866,9 @@ class MainWindow(QMainWindow):
                 menu.addAction(a["lock"] if not single.locked else a["unlock"])
             if any(isinstance(i, ConnectorItem) for i in sel):
                 menu.addSeparator()
+                menu.addMenu(self._weight_menu())
+                menu.addMenu(self._dash_menu())
+                menu.addMenu(self._arrow_menu())
                 for r in ROUTES:
                     act = menu.addAction(icons.icon("route"), f"Connecteur {ROUTE_LABELS[r].lower()}")
                     act.triggered.connect(lambda _=False, v=r: sc.apply_connector_style(
