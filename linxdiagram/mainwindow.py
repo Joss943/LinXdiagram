@@ -19,14 +19,14 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, Q
                              QMainWindow, QMenu, QMessageBox, QSlider, QSplitter,
                              QStackedWidget, QTabBar, QToolButton, QVBoxLayout, QWidget, QWidgetAction)
 
-from . import (APP_NAME, __version__, FILE_EXT, compat, datavis, export, fields, fileformat, icons, quickstyles,
-               security, stencils, swimlanes, templates, vsdx)
+from . import (APP_NAME, __version__, FILE_EXT, compat, datavis, export, fileformat, icons, quickstyles,
+               security, favorites, fields, shapeops, spellcheck, stencils, swimlanes, templates, vsdx)
 from .backstage import Backstage
 from .canvas import CanvasArea
 from .commands import DocSettingsCommand, PageCommand
-from .dialogs import (DataGraphicDialog, DataImportDialog, DataLinkDialog, FieldDialog, FindReplaceDialog,
+from .dialogs import (DataGraphicDialog, DataImportDialog, DataLinkDialog, FindReplaceDialog,
                       ImageExportDialog, LayersDialog, OptionsDialog, PageSetupDialog, PasswordDialog, PropertiesDialog,
-                      ShapeSheetDialog, ShortcutsDialog, ZoomDialog)
+                      ShapeSheetDialog, ShortcutsDialog, ZoomDialog, FieldDialog, SpellDialog)
 from .document import Document
 from .items import ConnectorItem, ShapeItem, decode_image
 from .panes import (CommentsPane, DrawingExplorerPane, FormatPane, IssuesPane, PanZoomPane,
@@ -45,6 +45,7 @@ VSDX_FILTER = "Dessin Visio (*.vsdx)"
 LINE_WEIGHTS = (0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0)
 FONT_SIZES = (6, 7, 8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48, 72)
 CFF_TAB = "Diagramme de flux interfonctionnel"
+CONTAINER_TAB = "Format du conteneur"
 SYMBOLS = "©®™€£$¥§¶°±×÷≈≠≤≥∞µπΩΣ√∑←→↑↓↔⇒✓✗•…«»"
 BACKGROUNDS = (("#ffffff", "Blanc"), ("#f3f2f1", "Gris clair"), ("#eaf1fb", "Bleu clair"),
                ("#eef7ee", "Vert clair"), ("#fdf5e6", "Sable"), ("#f6effa", "Lavande"),
@@ -258,7 +259,9 @@ class MainWindow(QMainWindow):
                 ("line", "Ligne", "line", "Ctrl+6", "Tracer un trait."),
                 ("pen", "Stylo", "pen_tool", "Ctrl+7", "Tracer un dessin à main levée."),
                 ("rectangle", "Rectangle", "rect_tool", "Ctrl+8", "Dessiner un rectangle."),
-                ("ellipse", "Ellipse", "ellipse_tool", "Ctrl+9", "Dessiner une ellipse.")):
+                ("ellipse", "Ellipse", "ellipse_tool", "Ctrl+9", "Dessiner une ellipse."),
+                ("freeform", "Forme libre", "freeform", "Ctrl+5", "Dessiner une forme fermée à main levée."),
+                ("arc", "Arc", "arc", None, "Tracer un arc entre deux points.")):
             act = A(f"tool_{key}", text, ic, sc, None, checkable=True, tip=tip,
                     label="Pointeur" if key == "select" else None)
             act.triggered.connect(lambda _=False, k=key: self.doc.set_tool(k))
@@ -306,17 +309,6 @@ class MainWindow(QMainWindow):
           self._sc(lambda s: s.distribute("h")))
         A("distribute_v", "Distribuer verticalement", "distribute_v", None,
           self._sc(lambda s: s.distribute("v")))
-        A("auto_space", "Espacement automatique", "auto_space", None, self.auto_space,
-          tip="Aligne les formes et les espace régulièrement (toute la page si rien n'est sélectionné).")
-        for key, text, tip in (
-                ("union", "Union", "Fusionne les formes sélectionnées en une seule."),
-                ("combine", "Combiner", "Réunit les formes ; les zones superposées deviennent des trous."),
-                ("fragment", "Fragmenter", "Découpe les formes en morceaux à chaque chevauchement."),
-                ("intersect", "Intersection", "Ne garde que la zone commune aux formes."),
-                ("subtract", "Soustraire", "Retire les autres formes de la forme la plus en arrière.")):
-            A(f"op_{key}", text, f"shape_{key}", None, lambda k=key: self.shape_operation(k), tip=tip)
-        A("insert_field", "Champ…", "field", None, self.insert_field,
-          tip="Insère un champ (numéro de page, date, titre, donnée de forme…) mis à jour automatiquement.")
         A("lock", "Verrouiller la forme", "lock", None, self._sc(lambda s: s.set_locked(s.selected_shapes(), True)),
           tip="Empêche de déplacer, redimensionner ou supprimer les formes sélectionnées.")
         A("unlock", "Déverrouiller la forme", "lock", None,
@@ -325,9 +317,26 @@ class MainWindow(QMainWindow):
         A("page_add", "Page vierge", "page_add", None, self.add_page, tip="Insère une nouvelle page.")
         A("page_dup", "Dupliquer la page", "page_dup", None, self.duplicate_page)
         A("page_del", "Supprimer la page", "page_del", None, self.delete_page)
-        A("page_bg_add", "Page d'arrière-plan", "page_background", None, self.add_background_page,
-          tip="Insère une page d'arrière-plan dont les formes apparaissent sous la page active.")
         A("page_rename", "Renommer la page…", "page_rename", None, self.rename_page)
+        A("add_favorite", "Ajouter aux Favoris…", "shapes_panel", None, self.add_to_favorites,
+          tip="Enregistre la sélection dans le gabarit Favoris (Mes formes) pour la réutiliser.")
+        A("container_fit", "Ajuster au contenu", "auto_size", None,
+          lambda: self._with_container(lambda sc, c: sc.container_fit(c)),
+          tip="Redimensionne le conteneur autour des formes qu'il contient.")
+        A("container_select", "Sélectionner le contenu", "select_all", None,
+          lambda: self._with_container(lambda sc, c: sc.container_select_contents(c)))
+        A("container_disband", "Désassembler le conteneur", "ungroup", None,
+          lambda: self._with_container(lambda sc, c: sc.container_disband(c)),
+          tip="Supprime le conteneur en conservant les formes qu'il contient.")
+        A("spelling", "Orthographe", "spelling", "F7", self.check_spelling,
+          tip="Vérifie l'orthographe de tous les textes du document (dictionnaires Hunspell du système).")
+        A("insert_field", "Champ", "field", None, self.insert_field,
+          tip="Insère un champ qui se met à jour : date, heure, numéro de page, nom du fichier…")
+        A("page_background_new", "Page d'arrière-plan", "background_page", None, self.add_background_page,
+          tip="Insère une page d'arrière-plan (cartouche, logo, filigrane) affichée derrière les pages "
+              "qui l'utilisent.")
+        A("page_is_background", "Page d'arrière-plan", None, None, self.toggle_background_page, checkable=True,
+          label="Utiliser comme page d'arrière-plan")
         A("image", "Images", "image", None, self.insert_image_dialog, tip="Insère une image PNG ou JPEG.")
         A("textbox", "Zone de texte", "textbox", None, lambda: self._insert("basic.text"))
         A("link", "Lien hypertexte…", "link", "Ctrl+K", self.edit_link, label="Lien")
@@ -364,6 +373,16 @@ class MainWindow(QMainWindow):
         A("subprocess", "Créer à partir de la sélection", "subprocess", None, self.create_subprocess,
           tip="Déplace la sélection vers une nouvelle page reliée par un sous-processus.")
         A("check_diagram", "Vérifier le diagramme", "check_diagram", None, self.check_diagram)
+        A("auto_align_space", "Aligner automatiquement et espacer", "position", None,
+          self._sc(lambda s: s.auto_align_space()),
+          tip="Aligne les formes reliées presque alignées et égalise leurs espacements.")
+        A("auto_align", "Aligner automatiquement", "align", None,
+          self._sc(lambda s: s.auto_align_space(space=False)))
+        A("auto_space", "Espacement automatique", "distribute_v", None,
+          self._sc(lambda s: s.auto_align_space(align=False)))
+        for op, label in shapeops.OPERATIONS.items():
+            A(f"op_{op}", label, "union" if op == "union" else "shape_ops", None,
+              lambda _=False, o=op: self._shape_op(o))
         A("cff_lane", "Couloir", "swimlane", None, self._sc(lambda s: s.cff_insert_lane()),
           tip="Insère un couloir après le couloir sélectionné (ou à la fin).")
         A("cff_lane_before", "Insérer un couloir avant", "swimlane", None,
@@ -465,6 +484,8 @@ class MainWindow(QMainWindow):
         self.splitter.setChildrenCollapsible(False)
         self.shapes_panel = ShapesPane()
         self.shapes_panel.shapeActivated.connect(self._add_at_center)
+        self.shapes_panel.favorites = self._favorites()
+        self.shapes_panel.favoriteMenu.connect(self._favorite_menu)
         self.shapes_panel.quickShapeChanged.connect(lambda t: setattr(self.doc, "quick_shape", t))
         self.shapes_panel.closed.connect(lambda: self.a["show_shapes"].setChecked(False))
         self.shapes_panel.categoriesChanged.connect(lambda: QTimer.singleShot(0, self._update_cff_tab))
@@ -476,6 +497,7 @@ class MainWindow(QMainWindow):
         self.view = self.canvas.view
         self.view.zoomChanged.connect(self._zoom_changed)
         self.view.contextMenuRequested.connect(self._context_menu)
+        self.view.favoriteDropped.connect(self.insert_favorite)
         self.view.imageDropped.connect(self.insert_image)
         cl.addWidget(self.canvas, 1)
         cl.addWidget(self._build_page_bar())
@@ -639,7 +661,8 @@ class MainWindow(QMainWindow):
 
         g = RibbonGroup("Outils")
         g.large(a["tool_select"])
-        draw_menu = self._menu(a["tool_rectangle"], a["tool_ellipse"], a["tool_line"], a["tool_pen"])
+        draw_menu = self._menu(a["tool_rectangle"], a["tool_ellipse"], a["tool_line"], a["tool_pen"],
+                               a["tool_freeform"], a["tool_arc"])
         g.column(a["tool_connector"], a["tool_text"],
                  R(None, SMALL, text="Outils de dessin", icon_name="drawing_tools", menu=draw_menu))
         home.addWidget(g)
@@ -677,8 +700,9 @@ class MainWindow(QMainWindow):
                                 a["align_top"], a["align_middle"], a["align_bottom"]),
                 tooltip="<b>Aligner</b><br>Aligne les formes sélectionnées.")
         g.large(None, text="Position", icon_name="position",
-                menu=self._menu(a["auto_space"], None, a["distribute_h"], a["distribute_v"], None,
-                                a["rotate_right"], a["rotate_left"], a["flip_h"], a["flip_v"]),
+                menu=self._menu(a["auto_align_space"], a["auto_align"], a["auto_space"], None,
+                                a["distribute_h"], a["distribute_v"], None, a["rotate_right"],
+                                a["rotate_left"], a["flip_h"], a["flip_v"]),
                 tooltip="<b>Position</b><br>Distribuer, faire pivoter, retourner.")
         g.column(R(a["front"], SMALL, menu=self._menu(a["front"], a["forward"]), split=True),
                  R(a["back"], SMALL, menu=self._menu(a["back"], a["backward"]), split=True),
@@ -705,8 +729,9 @@ class MainWindow(QMainWindow):
         # ======================================================= Insertion
         ins = self.ribbon.add_page("Insertion")
         g = RibbonGroup("Pages")
-        g.large(a["page_add"], menu=self._menu(a["page_add"], a["page_bg_add"], None, a["page_dup"],
-                                               a["page_rename"], a["page_del"]), split=True)
+        g.large(a["page_add"], menu=self._menu(a["page_add"], a["page_background_new"], a["page_dup"],
+                                               a["page_rename"], a["page_del"]),
+                split=True)
         ins.addWidget(g)
         g = RibbonGroup("Illustrations")
         g.large(a["image"])
@@ -739,8 +764,7 @@ class MainWindow(QMainWindow):
         wa = QWidgetAction(sym)
         wa.setDefaultWidget(holder)
         sym.addAction(wa)
-        g.column(a["screentip"], R(None, SMALL, text="Symbole", icon_name="symbol", menu=sym),
-                 a["insert_field"])
+        g.column(a["screentip"], R(None, SMALL, text="Symbole", icon_name="symbol", menu=sym), a["insert_field"])
         ins.addWidget(g)
 
         # ======================================================= Création
@@ -832,6 +856,9 @@ class MainWindow(QMainWindow):
 
         # ======================================================= Révision
         rev = self.ribbon.add_page("Révision")
+        g = RibbonGroup("Vérification")
+        g.large(a["spelling"])
+        rev.addWidget(g)
         g = RibbonGroup("Commentaires")
         g.large(a["new_comment"])
         g.column(R(a["delete_comment"], SMALL, text="Supprimer"), a["prev_comment"], a["next_comment"])
@@ -881,6 +908,23 @@ class MainWindow(QMainWindow):
                                     lambda: self.shapes_panel.open_category(stencils.CFF)))))
         cff.addWidget(g)
 
+        # ======================================================= Conteneur (contextuel)
+        ctab = self.ribbon.add_page(CONTAINER_TAB)
+        g = RibbonGroup("Taille")
+        g.large(a["container_fit"])
+        ctab.addWidget(g)
+        g = RibbonGroup("Styles du conteneur")
+        self.container_gallery = RibbonGallery(
+            [(icons.stencil_pixmap(stencils.get(t), 40), name, t) for t, name in stencils.CONTAINER_STYLES],
+            QSize(46, 46), visible=4, popup_cols=4)
+        self.container_gallery.activated.connect(self._container_style)
+        g.add(self.container_gallery, Qt.AlignmentFlag.AlignVCenter)
+        ctab.addWidget(g)
+        g = RibbonGroup("Appartenance")
+        g.large(a["container_select"])
+        g.large(a["container_disband"])
+        ctab.addWidget(g)
+
         # ======================================================= Affichage
         view = self.ribbon.add_page("Affichage")
         g = RibbonGroup("Affichages")
@@ -914,9 +958,10 @@ class MainWindow(QMainWindow):
         dev.addWidget(g)
         g = RibbonGroup("Conception de formes")
         g.large(None, text="Opérations", icon_name="shape_ops",
-                menu=self._menu(a["op_union"], a["op_combine"], a["op_fragment"], a["op_intersect"],
-                                a["op_subtract"]),
-                tooltip="<b>Opérations</b><br>Union, Combiner, Fragmenter, Intersection, Soustraire.")
+                menu=self._menu(*[a[f"op_{op}"] for op in shapeops.OPERATIONS]),
+                tooltip="<b>Opérations</b><br>Union, Combiner, Fragmenter, Intersecter ou Soustraire les "
+                        "formes sélectionnées (la première sélectionnée sert de référence).")
+        g.column(a["tool_freeform"], a["tool_arc"], a["tool_pen"])
         dev.addWidget(g)
         g = RibbonGroup("Interopérabilité")
         g.large(a["import_vsdx"])
@@ -1153,9 +1198,11 @@ class MainWindow(QMainWindow):
         self.page_tabs.blockSignals(True)
         while self.page_tabs.count():
             self.page_tabs.removeTab(0)
-        for i, p in enumerate(doc.pages):
-            self.page_tabs.addTab(p.page_name)
-            self._page_tab_tip(i, p)
+        for p in doc.pages:
+            i = self.page_tabs.addTab(p.page_name)
+            if p.is_background:
+                self.page_tabs.setTabIcon(i, icons.icon("background_page"))
+                self.page_tabs.setTabToolTip(i, "Page d'arrière-plan")
         cur = self.scene()
         if cur in doc.pages:
             self.page_tabs.setCurrentIndex(doc.pages.index(cur))
@@ -1179,6 +1226,12 @@ class MainWindow(QMainWindow):
         self.a["auto_size"].setChecked(scene.auto_size)
         self.a["auto_size"].blockSignals(False)
         self._on_selection()
+
+    def _shape_op(self, op: str) -> None:
+        sc = self.scene()
+        if sc is not None and not sc.shape_operation(op):
+            self.statusBar().showMessage(f"« {shapeops.OPERATIONS[op]} » : sélectionnez au moins deux formes "
+                                         "qui se chevauchent.", 6000)
 
     def _update_cff_tab(self) -> None:
         """L'onglet interfonctionnel apparaît dès qu'on utilise des couloirs, comme dans Visio."""
@@ -1257,15 +1310,6 @@ class MainWindow(QMainWindow):
             act.triggered.connect(lambda _=False, sc=p: self.show_page(sc))
         m.exec(self.all_pages.mapToGlobal(QPoint(0, -m.sizeHint().height())))
 
-    def _page_tab_tip(self, index: int, page) -> None:
-        if page.page_kind == "background":
-            tip = "Page d'arrière-plan"
-        elif page.background_scene() is not None:
-            tip = f"Arrière-plan : {page.backpage}"
-        else:
-            tip = ""
-        self.page_tabs.setTabToolTip(index, security.tooltip_html(tip) if tip else "")
-
     def _after_change(self) -> None:
         st = self.doc.undo_stack
         self.a["undo"].setEnabled(st.canUndo())
@@ -1275,10 +1319,13 @@ class MainWindow(QMainWindow):
         self._update_title()
         self._on_selection()
         for i, p in enumerate(self.doc.pages):
+            if i < self.page_tabs.count() and self.page_tabs.tabText(i) != p.page_name:
+                self.page_tabs.setTabText(i, p.page_name)
             if i < self.page_tabs.count():
-                if self.page_tabs.tabText(i) != p.page_name:
-                    self.page_tabs.setTabText(i, p.page_name)
-                self._page_tab_tip(i, p)
+                self.page_tabs.setTabIcon(i, icons.icon("background_page") if p.is_background else QIcon())
+        self._update_page_type_actions()
+        for p in self.doc.pages:
+            p.refresh_fields()
         sc = self.scene()
         if sc is not None:
             self.a["auto_size"].blockSignals(True)
@@ -1323,6 +1370,7 @@ class MainWindow(QMainWindow):
         sel = sc.selected_all()
         shapes = sc.selected_shapes()
         has = bool(sel)
+        self.ribbon.set_tab_visible(CONTAINER_TAB, sc.is_plain_container(sc.single_selected))
         for key in ("cut", "copy", "delete", "duplicate", "front", "back", "forward", "backward",
                     "edit_text"):
             self.a[key].setEnabled(has)
@@ -1338,6 +1386,8 @@ class MainWindow(QMainWindow):
         for key in ("shapesheet", "link", "screentip", "new_comment"):
             self.a[key].setEnabled(isinstance(single, ShapeItem))
         self.a["subprocess"].setEnabled(bool(shapes))
+        for op in shapeops.OPERATIONS:
+            self.a[f"op_{op}"].setEnabled(len(shapes) >= 2)
         self.a["data_unlink"].setEnabled(any(s.data_links for s in shapes))
         editable_shapes = [s for s in shapes if not s.locked]
         common_fields = set.intersection(*(set(s.data) for s in editable_shapes)) if editable_shapes else set()
@@ -1375,7 +1425,11 @@ class MainWindow(QMainWindow):
         sc = self.scene()
         if sc is None or sc not in self.doc.pages:
             return
-        self.page_label.setText(f"Page {self.doc.pages.index(sc) + 1} sur {len(self.doc.pages)}")
+        fg = [p for p in self.doc.pages if not p.is_background]
+        if sc.is_background:
+            self.page_label.setText(f"Arrière-plan « {sc.page_name} »")
+        else:
+            self.page_label.setText(f"Page {fg.index(sc) + 1} sur {len(fg)}")
         single = sc.single_selected
         if isinstance(single, ShapeItem):
             self.sel_label.setText(f"Largeur : {single.w / PX_PER_MM:.0f} mm    Hauteur : "
@@ -1467,6 +1521,9 @@ class MainWindow(QMainWindow):
         sc = self.scene()
         if sc is None:
             return
+        if sc.selected_guide is not None and not sc.selected_all():
+            sc.remove_guide(sc.selected_guide)
+            return
         locked = [s for s in sc.selected_shapes() if s.locked]
         sc.delete_selection()
         if locked:
@@ -1543,13 +1600,81 @@ class MainWindow(QMainWindow):
 
     def _add_at_center(self, type_id: str) -> None:
         sc = self.scene()
-        if sc is not None:
+        if sc is None:
+            return
+        fav = favorites.Favorites.index_of(type_id)
+        if fav is not None:
+            self.insert_favorite(fav, self._view_center())
+        else:
             sc.add_shape(type_id, self._view_center())
-            self.view.setFocus()
+        self.view.setFocus()
+
+    # ------------------------------------------------------------------ Favoris (Mes formes)
+    def _favorites(self):
+        if getattr(self.ctx, "favorites", None) is None:
+            folder = security.private_dir(compat.config_dir())
+            self.ctx.favorites = favorites.Favorites(os.path.join(folder, "favoris.json"))
+        return self.ctx.favorites
+
+    def add_to_favorites(self) -> None:
+        """« Ajouter aux Favoris » : la sélection devient une forme réutilisable (Mes formes)."""
+        sc = self.scene()
+        data = sc.copy_selection() if sc is not None else None
+        if not data:
+            return
+        single = sc.single_selected
+        default = (single.text.strip().splitlines() or [""])[0] if single is not None else ""
+        if not default and isinstance(single, ShapeItem):
+            default = single.sdef.name
+        name, ok = QInputDialog.getText(self, "Ajouter aux Favoris", "Nom de la forme :",
+                                        text=default or "Ma forme")
+        if not ok:
+            return
+        if not self._favorites().add(name, data):
+            self.statusBar().showMessage("Le gabarit Favoris est plein ou la forme est trop volumineuse.", 6000)
+            return
+        for w in self.ctx.windows:
+            w.shapes_panel.favorites = self._favorites()
+            w.shapes_panel.refresh_favorites()
+        self.shapes_panel.open_category(favorites.CATEGORY)
+
+    def insert_favorite(self, index: int, pos) -> None:
+        sc = self.scene()
+        favs = self._favorites()
+        if sc is None or not 0 <= index < len(favs.items):
+            return
+        try:
+            sc.paste(favs.items[index][1], pos - favs.center_of(index), "Insérer une forme favorite")
+        except fileformat.DocumentError as exc:
+            self._plain_message(QMessageBox.Icon.Warning, APP_NAME, str(exc))
+
+    def _favorite_menu(self, index: int, global_pos) -> None:
+        favs = self._favorites()
+        m = QMenu(self)
+        m.addAction("Renommer…", lambda: self._rename_favorite(index))
+        m.addAction(icons.icon("delete"), "Supprimer des Favoris", lambda: self._remove_favorite(index))
+        m.exec(global_pos)
+
+    def _rename_favorite(self, index: int) -> None:
+        favs = self._favorites()
+        name, ok = QInputDialog.getText(self, "Renommer", "Nom de la forme :", text=favs.items[index][0])
+        if ok:
+            favs.rename(index, name)
+            for w in self.ctx.windows:
+                w.shapes_panel.refresh_favorites()
+
+    def _remove_favorite(self, index: int) -> None:
+        self._favorites().remove(index)
+        for w in self.ctx.windows:
+            w.shapes_panel.refresh_favorites()
 
     def _insert(self, type_id: str, style: dict | None = None, text_style: dict | None = None) -> None:
         sc = self.scene()
         if sc is None:
+            return
+        if stencils.get(type_id).container and sc.selected_shapes():
+            sc.wrap_in_container(type_id, style, text_style)  # comme Visio : autour de la sélection
+            self.view.setFocus()
             return
         st = sc.new_shape_state(type_id, self._view_center())
         if style:
@@ -2247,59 +2372,6 @@ class MainWindow(QMainWindow):
         idx = self.doc.pages.index(sc) + 1 if sc in self.doc.pages else len(self.doc.pages)
         self.doc.undo_stack.push(PageCommand(self.doc, "Insérer une page", add=page, index=idx))
 
-    # ================================================================== conception de formes
-    def shape_operation(self, op: str) -> None:
-        sc = self.scene()
-        if sc is None:
-            return
-        if not sc.shape_operation(op):
-            need = "une forme" if op == "fragment" else "au moins deux formes qui se chevauchent"
-            self.statusBar().showMessage(f"Sélectionnez {need} (hors images et couloirs).", 6000)
-
-    def auto_space(self) -> None:
-        sc = self.scene()
-        if sc is not None and not sc.auto_space():
-            self.statusBar().showMessage("Il faut au moins deux formes à espacer.", 5000)
-
-    def insert_field(self) -> None:
-        sc = self.scene()
-        if sc is None:
-            return
-        dlg = FieldDialog(self, sc)
-        if dlg.exec() != FieldDialog.DialogCode.Accepted or not dlg.field():
-            return
-        tok = fields.token(dlg.field())
-        item = sc.editing_item
-        if item is not None:
-            item.label.textCursor().insertText(tok)
-            return
-        shapes = sc.selected_shapes()
-        if len(shapes) == 1 and not shapes[0].locked:
-            def add(_it, st):
-                st["text"] = (st["text"] + " " + tok).strip() if st["text"] else tok
-            sc.modify(shapes, add, "Insérer un champ")
-            return
-        view_center = self.view.mapToScene(self.view.viewport().rect().center())
-        st = sc.new_shape_state("basic.text", view_center)
-        st["text"] = tok
-        sc.add_states([st], "Insérer un champ")
-
-    def add_background_page(self) -> None:
-        """Insère une page d'arrière-plan et l'affecte à la page active si elle n'en a pas."""
-        sc = self.scene()
-        data = fileformat.default_page(self.doc.unique_page_name("Arrière-plan"))
-        data["width"], data["height"] = sc.page_w, sc.page_h
-        data["kind"] = "background"
-        page = self.doc.make_page(data=data)
-        self.doc.undo_stack.beginMacro("Insérer une page d'arrière-plan")
-        if sc.page_kind == "foreground" and not sc.background_scene():
-            before = sc.page_props()
-            self.doc.undo_stack.push(PageCommand(self.doc, "Affecter l'arrière-plan", scene=sc,
-                                                 before=before, after=dict(before, backpage=data["name"])))
-        self.doc.undo_stack.push(PageCommand(self.doc, "Insérer une page d'arrière-plan", add=page,
-                                             index=len(self.doc.pages)))
-        self.doc.undo_stack.endMacro()
-
     def duplicate_page(self) -> None:
         sc = self.scene()
         data = sc.to_dict()
@@ -2324,15 +2396,164 @@ class MainWindow(QMainWindow):
         name, ok = QInputDialog.getText(self, "Renommer la page", "Nom de la page :", text=sc.page_name)
         name = security.clean_line(name, 100)
         if ok and name and name != sc.page_name:
-            before = sc.page_props()
-            self.doc.undo_stack.push(PageCommand(self.doc, "Renommer la page", scene=sc, before=before,
-                                                 after=dict(before, name=name)))
+            name = self.doc.unique_page_name(name) if any(p.page_name == name for p in self.doc.pages) else name
+            old = sc.page_name
+            self.doc.undo_stack.beginMacro("Renommer la page")
+            try:
+                before = sc.page_props()
+                self.doc.undo_stack.push(PageCommand(self.doc, "Renommer la page", scene=sc, before=before,
+                                                     after=dict(before, name=name)))
+                # Les pages qui utilisaient cet arrière-plan le gardent.
+                for p in self.doc.pages:
+                    if sc.is_background and p.backpage == old:
+                        b = p.page_props()
+                        self.doc.undo_stack.push(PageCommand(self.doc, "Renommer la page", scene=p, before=b,
+                                                             after=dict(b, backpage=name)))
+            finally:
+                self.doc.undo_stack.endMacro()
+            self.show_page(sc)
+
+    def _with_container(self, fn) -> None:
+        sc = self.scene()
+        c = sc.single_selected if sc is not None else None
+        if sc is not None and sc.is_plain_container(c):
+            fn(sc, c)
+
+    def _container_style(self, type_id: str) -> None:
+        sc = self.scene()
+        c = sc.single_selected if sc is not None else None
+        if not sc or not sc.is_plain_container(c) or c.type_id == type_id:
+            return
+        style, ts = fileformat.default_shape_styles(type_id, self.doc.settings["theme"])
+
+        def fn(_it, st):
+            st["type"] = type_id
+            st["style"] = dict(style)
+            st["text_style"] = {**st["text_style"], **{k: ts[k] for k in ("color", "bold", "halign", "valign")}}
+        sc.modify([c], fn, "Style du conteneur")
+
+    def check_spelling(self) -> None:
+        """Révision > Orthographe (F7) : page active d'abord, puis les autres pages."""
+        if getattr(self.ctx, "speller", None) is None:
+            folder = security.private_dir(compat.config_dir())
+            self.ctx.speller = spellcheck.SpellChecker(os.path.join(folder, "dictionnaire.txt"))
+        checker = self.ctx.speller
+        if not checker.available:
+            QMessageBox.information(self, "Orthographe", "Aucun dictionnaire Hunspell n'est installé.\n"
+                                    + spellcheck.install_hint())
+            return
+        sc = self.scene()
+        if sc is not None and sc.editing_item is not None:
+            sc.editing_item.finish_edit()
+        pages = ([sc] if sc in self.doc.pages else []) + [p for p in self.doc.pages if p is not sc]
+        targets = []
+        for p in pages:
+            items = [it for it in p.all_items() if it.text.strip()]
+            items.sort(key=lambda it: (round(it.sceneBoundingRect().top() / 20), it.sceneBoundingRect().left()))
+            targets += [(p, it) for it in items]
+        dlg = SpellDialog(self, checker, targets)
+        if not dlg.start():
+            QMessageBox.information(self, "Orthographe", "La vérification orthographique est terminée : "
+                                    "aucune faute trouvée.")
+            return
+        dlg.exec()
+
+    def insert_field(self) -> None:
+        """Insertion > Champ : ajoute un champ au texte en cours, à la forme sélectionnée ou à une zone
+        de texte nouvelle, comme dans Visio."""
+        sc = self.scene()
+        if sc is None:
+            return
+        dlg = FieldDialog(self, sc)
+        if not dlg.exec():
+            return
+        tok = fields.token(dlg.field())
+        if sc.editing_item is not None:
+            sc.editing_item.label.textCursor().insertText(tok)
+            return
+        single = sc.single_selected
+        if single is not None and not getattr(single, "locked", False):
+            sc.modify([single], lambda _it, st: st.update(text=(st["text"] + " " + tok).strip()), "Insérer un champ")
+            return
+        st = sc.new_shape_state("basic.text", sc.page_rect().center())
+        st["text"] = tok
+        sc.add_states([st], "Insérer un champ")
+        sc.select_items([sc.item_by_id(st["id"])])
+
+    def add_background_page(self) -> None:
+        """Insertion > Page d'arrière-plan : nouvelle page affectée à la page active si elle n'en a pas."""
+        sc = self.scene()
+        data = fileformat.default_page(self.doc.unique_page_name("Arrière-plan"))
+        if sc is not None:
+            data.update(width=sc.page_w, height=sc.page_h)
+        data["is_background"] = True
+        page = self.doc.make_page(data=data)
+        self.doc.undo_stack.beginMacro("Insérer une page d'arrière-plan")
+        try:
+            self.doc.undo_stack.push(PageCommand(self.doc, "Insérer une page d'arrière-plan", add=page,
+                                                 index=len(self.doc.pages)))
+            if sc is not None and not sc.is_background and not sc.backpage:
+                b = sc.page_props()
+                self.doc.undo_stack.push(PageCommand(self.doc, "Arrière-plan", scene=sc, before=b,
+                                                     after=dict(b, backpage=page.page_name)))
+        finally:
+            self.doc.undo_stack.endMacro()
+        self.show_page(page)
+
+    def set_backpage(self, name: str) -> None:
+        sc = self.scene()
+        if sc is None or sc.page_name == name or sc.backpage == name:
+            return
+        b = sc.page_props()
+        self.doc.undo_stack.push(PageCommand(self.doc, "Arrière-plan de la page", scene=sc, before=b,
+                                             after=dict(b, backpage=name)))
+
+    def toggle_background_page(self, on: bool) -> None:
+        sc = self.scene()
+        if sc is None or sc.is_background == on:
+            return
+        if on and sum(1 for p in self.doc.pages if not p.is_background) <= 1:
+            self.statusBar().showMessage("Le document doit garder au moins une page de premier plan.", 6000)
+            self._update_page_type_actions()
+            return
+        b = sc.page_props()
+        self.doc.undo_stack.push(PageCommand(self.doc, "Type de page", scene=sc, before=b,
+                                             after=dict(b, is_background=on, backpage="" if on else b["backpage"])))
+
+    def _backpage_menu(self) -> QMenu:
+        m = QMenu("Arrière-plan de la page", self)
+        m.setIcon(icons.icon("background_page"))
+
+        def fill():
+            m.clear()
+            sc = self.scene()
+            group = QActionGroup(m)
+            for name in [""] + [p.page_name for p in self.doc.pages if p.is_background and p is not sc]:
+                act = m.addAction(name or "Aucun")
+                act.setCheckable(True)
+                act.setChecked(sc is not None and sc.backpage == name)
+                group.addAction(act)
+                act.triggered.connect(lambda _=False, n=name: self.set_backpage(n))
+            m.addSeparator()
+            m.addAction(self.a["page_background_new"])
+        m.aboutToShow.connect(fill)
+        return m
+
+    def _update_page_type_actions(self) -> None:
+        sc = self.scene()
+        act = self.a.get("page_is_background")
+        if act is not None and sc is not None:
+            act.blockSignals(True)
+            act.setChecked(sc.is_background)
+            act.blockSignals(False)
 
     def _page_menu(self, pos) -> None:
         idx = self.page_tabs.tabAt(pos)
         if idx >= 0:
             self.show_page(self.doc.pages[idx])
+        self._update_page_type_actions()
         m = self._menu(self.a["page_add"], self.a["page_dup"], self.a["page_rename"], self.a["page_del"], None,
+                       self.a["page_background_new"], self.a["page_is_background"], self._backpage_menu(), None,
                        self.a["page_setup"])
         m.exec(self.page_tabs.mapToGlobal(pos))
 
@@ -2582,6 +2803,7 @@ class MainWindow(QMainWindow):
             grp = menu.addMenu(icons.icon("group"), "Groupe")
             grp.addAction(a["group"])
             grp.addAction(a["ungroup"])
+            menu.addAction(a["add_favorite"])
             if isinstance(single, ShapeItem):
                 menu.addSeparator()
                 menu.addAction(a["link"])
@@ -2829,7 +3051,8 @@ class MainWindow(QMainWindow):
         path = self._export_path("Exporter en PDF", "Document PDF (*.pdf)", ".pdf")
         if path:
             title = self.doc.properties.get("title") or self.doc_title()
-            self._run_export(lambda: export.export_pdf(self.doc.printable_pages(), path, title), path)
+            pages = [p for p in self.doc.pages if not p.is_background] or list(self.doc.pages)
+            self._run_export(lambda: export.export_pdf(pages, path, title), path)
 
     def export_image(self, kind: str) -> None:
         sc = self.scene()
@@ -2844,17 +3067,18 @@ class MainWindow(QMainWindow):
             self._run_export(lambda: export.export_image(sc, path, opts["mode"], opts["dpi"], opts["transparent"]),
                              path)
 
+    def export_html(self) -> None:
+        path = self._export_path("Enregistrer comme page web", "Page web (*.html *.htm)", ".html")
+        if path:
+            title = self.doc.properties.get("title") or self.doc_title()
+            pages = [p for p in self.doc.pages if not p.is_background] or list(self.doc.pages)
+            self._run_export(lambda: export.export_html(pages, path, title), path)
+
     def export_svg(self) -> None:
         sc = self.scene()
         path = self._export_path("Exporter en SVG", "Image SVG (*.svg)", ".svg")
         if path:
             self._run_export(lambda: export.export_svg(sc, path, "page"), path)
-
-    def export_html(self) -> None:
-        path = self._export_path("Enregistrer comme page web", "Page web (*.html *.htm)", ".html")
-        if path:
-            title = self.doc.properties.get("title") or self.doc_title()
-            self._run_export(lambda: export.export_html(self.doc.printable_pages(), path, title), path)
 
     def export_vsdx(self) -> None:
         path = self._export_path("Exporter au format Visio", VSDX_FILTER, ".vsdx")
@@ -2890,7 +3114,6 @@ class MainWindow(QMainWindow):
             values = dlg.values()
             if values != self.doc.properties:
                 self.doc.properties = values
-                self.doc.refresh_fields()
                 self.doc.undo_stack.resetClean()
                 self._update_title()
 

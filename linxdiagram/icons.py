@@ -416,6 +416,53 @@ def _pen_tool(c):
     c.line(20, 7, 24, 11, BLUE, 2)
 
 
+@_reg("freeform", "tool_freeform")
+def _freeform(c):
+    p = QPainterPath(QPointF(5, 20))
+    p.cubicTo(3, 8, 14, 3, 20, 7)
+    p.cubicTo(30, 12, 28, 26, 18, 27)
+    p.cubicTo(10, 28, 7, 25, 5, 20)
+    c.path(p, fill=PAPER, stroke=INK)
+
+
+@_reg("arc", "tool_arc")
+def _arc_tool(c):
+    p = QPainterPath(QPointF(5, 27))
+    p.cubicTo(5, 14, 14, 5, 27, 5)
+    c.path(p, stroke=INK, sw=1.5)
+    c.rect(2, 24, 6, 6, fill=PAPER, stroke=INK)
+    c.rect(24, 2, 6, 6, fill=PAPER, stroke=INK)
+
+
+@_reg("union")
+def _union_icon(c):
+    p = QPainterPath()
+    p.addRect(QRectF(4, 8, 15, 15))
+    p.addEllipse(QPointF(20, 16), 8, 8)
+    c.path(p.simplified(), fill=BLUE_L, stroke=BLUE)
+
+
+@_reg("shape_ops")
+def _shape_ops(c):
+    c.rect(4, 8, 15, 15, fill=PAPER, stroke=INK)
+    c.ellipse(20, 16, 8, 8, fill=None, stroke=BLUE)
+
+
+@_reg("field")
+def _field(c):
+    c.rect(3, 6, 26, 20, fill=PAPER, stroke=INK)
+    c.rect(7, 12, 18, 8, fill=BLUE_L, stroke=BLUE)
+    c.line(10, 16, 22, 16, BLUE, 1.5)
+
+
+@_reg("spelling")
+def _spelling(c):
+    c.line(4, 9, 8, 22, INK, 1.5)
+    c.line(8, 22, 12, 9, INK, 1.5)
+    c.line(5.5, 17, 10.5, 17, INK, 1.2)
+    c.poly([(14, 19), (19, 25), (29, 10)], stroke=BLUE, sw=2.2, closed=False)
+
+
 @_reg("drawing_tools")
 def _drawing_tools(c):
     c.rect(3, 4, 15, 12, fill=PAPER, stroke=INK)
@@ -683,73 +730,6 @@ def _page_dup(c):
 def _page_del(c):
     _page(c, 5, 3, 18, 25)
     _x_badge(c, 23, 23)
-
-
-@_reg("page_background")
-def _page_background(c):
-    _page(c, 9, 2, 18, 22, 5, fill=BLUE_L)
-    _page(c, 4, 8, 18, 22, 5)
-
-
-def _op_pair():
-    a = QPainterPath()
-    a.addRect(QRectF(4.5, 6.5, 15, 15))
-    b = QPainterPath()
-    b.addEllipse(QPointF(20, 18), 8, 8)
-    return a, b
-
-
-@_reg("shape_union", "shape_ops")
-def _shape_union(c):
-    a, b = _op_pair()
-    c.path(a.united(b), fill=BLUE_L, stroke=BLUE)
-
-
-@_reg("shape_combine")
-def _shape_combine(c):
-    a, b = _op_pair()
-    p = QPainterPath(a)
-    p.addPath(b)
-    p.setFillRule(Qt.FillRule.OddEvenFill)
-    c.path(p, fill=BLUE_L, stroke=BLUE)
-
-
-@_reg("shape_fragment")
-def _shape_fragment(c):
-    a, b = _op_pair()
-    c.path(a.subtracted(b), fill=BLUE_L, stroke=BLUE)
-    c.path(a.intersected(b), fill=ORANGE_L, stroke=ORANGE)
-    c.path(b.subtracted(a), fill=YELLOW_L, stroke=YELLOW)
-
-
-@_reg("shape_intersect")
-def _shape_intersect(c):
-    a, b = _op_pair()
-    c.path(a, stroke=INK2)
-    c.path(b, stroke=INK2)
-    c.path(a.intersected(b), fill=BLUE_L, stroke=BLUE)
-
-
-@_reg("shape_subtract")
-def _shape_subtract(c):
-    a, b = _op_pair()
-    c.path(b.subtracted(a), stroke=INK2)
-    c.path(a.subtracted(b), fill=BLUE_L, stroke=BLUE)
-
-
-@_reg("field")
-def _field(c):
-    c.rect(3, 8, 26, 16, fill=PAPER, stroke=INK)
-    c.text(3, 8, 26, 16, "{ }", 11, bold=True, color=BLUE)
-
-
-@_reg("auto_space")
-def _auto_space(c):
-    for x in (3, 13, 23):
-        c.rect(x, 9, 6, 6, fill=BLUE_L, stroke=BLUE)
-    c.line(9, 12, 13, 12, INK).line(19, 12, 23, 12, INK)
-    c.line(3, 24, 29, 24, INK2)
-    c.head((29, 24), (1, 0), 3, INK2)
 
 
 @_reg("export_html")

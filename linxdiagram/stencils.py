@@ -621,6 +621,53 @@ def _arrow_pts(direction: str):
     return [(y, 1 - x) for x, y in right]
 
 
+# BPMN, blocs, chronologie, entité-relation
+
+def _diamond():
+    return _poly_path([(0.5, 0), (1, 0.5), (0.5, 1), (0, 0.5)])
+
+
+def _b_envelope():
+    return _rect(0, 0, 1, 1), _lines([(0, 0), (0.5, 0.55), (1, 0)])
+
+
+def _b_brace():
+    p = QPainterPath()
+    p.moveTo(1, 0)
+    p.cubicTo(0.5, 0, 0.5, 0.05, 0.5, 0.2)
+    p.lineTo(0.5, 0.4)
+    p.cubicTo(0.5, 0.48, 0.3, 0.5, 0, 0.5)
+    p.cubicTo(0.3, 0.5, 0.5, 0.52, 0.5, 0.6)
+    p.lineTo(0.5, 0.8)
+    p.cubicTo(0.5, 0.95, 0.5, 1, 1, 1)
+    return _rect(0, 0, 1, 1), p
+
+
+def _b_timeline():
+    ticks = [[(x / 10, 0.0), (x / 10, 1.0)] for x in range(1, 10)]
+    return _rect(0, 0.3, 1, 0.4), _lines(*ticks)
+
+
+def _b_interval():
+    return _rect(0, 0, 1, 1), _lines([(0, 0), (0, 1)], [(1, 0), (1, 1)])
+
+
+def _b_pointer():
+    return _poly_path([(0, 0), (1, 0), (1, 0.6), (0.5, 1), (0, 0.6)]), None
+
+
+def _b_entity():
+    return _rect(0, 0, 1, 1), _lines([(0, 0.28), (1, 0.28)])
+
+
+def _b_weak_entity():
+    return _rect(0, 0, 1, 1), _rect(0.04, 0.08, 0.92, 0.84)
+
+
+def _b_view():
+    return _rrect(0, 0, 1, 1, 0.08), _lines([(0, 0.28), (1, 0.28)])
+
+
 # ------------------------------------------------------------------ catalogue
 
 BASIC = "Formes de base"
@@ -633,8 +680,11 @@ CFF = "Diagramme de flux interfonctionnel"
 BPMN = "BPMN"
 CIRCUIT = "Schéma électrique"
 FLOORPLAN = "Plan d’aménagement"
+BLOCK = "Diagramme de blocs"
+TIMELINE = "Chronologie"
+DB = "Base de données (entité-relation)"
 
-CATEGORIES = (BASIC, FLOW, BPMN, CFF, FLOORPLAN, CIRCUIT, ARROWS_CAT, ORG, NET, UML)
+CATEGORIES = (BASIC, FLOW, BPMN, CFF, FLOORPLAN, CIRCUIT, ARROWS_CAT, BLOCK, ORG, NET, UML, DB, TIMELINE)
 
 _TRI_PORTS = ((0.5, 0.0), (0.75, 0.5), (0.5, 1.0), (0.25, 0.5))
 _LABEL_BELOW = (-0.6, 1.04, 2.2, 0.55)
@@ -976,6 +1026,60 @@ _DEFS: list[ShapeDef] = [
              style={"fill": "#fff2cc", "line": "#202020", "themed": False}),
 ]
 
+_EVENT_PORTS = SIDES
+_WHITE = {"fill": "#ffffff", "themed": False}
+_DEFS += [
+    # BPMN : compléments (les tâches, événements et passerelles sont définis plus haut)
+    ShapeDef("bpmn.message", "Message", BPMN, _unit(_b_envelope), (14, 10), text_rect=_LABEL_BELOW,
+             label_outside=True, style={**_WHITE, "line": "#595959"}, keywords="enveloppe courrier bpmn"),
+    ShapeDef("bpmn.group", "Groupe", BPMN, _b_round, (60, 40), SIDES_AND_CORNERS,
+             style={"fill": "", "line": "#595959", "dash": "dashdot", "themed": False},
+             text={"color": "#404040"}, text_rect=(0, 0, 1, 0.2), container=True, keywords="groupe regroupement bpmn"),
+    ShapeDef("bpmn.annotation", "Annotation de texte", BPMN, _unit(_b_annotation), (30, 14),
+             style={"fill": "", "line": "#595959", "themed": False}, outline_visible=False,
+             text={"color": "#404040", "halign": "left"}, keywords="commentaire note bpmn"),
+
+    # Diagramme de blocs
+    ShapeDef("block.box", "Bloc", BLOCK, _b_rect, (30, 20), SIDES_AND_CORNERS, keywords="boîte bloc"),
+    ShapeDef("block.rounded", "Bloc arrondi", BLOCK, _b_round, (30, 20), SIDES_AND_CORNERS),
+    ShapeDef("block.3d", "Bloc 3D", BLOCK, _unit(_b_cube), (30, 22), text_rect=(0, 0.2, 0.8, 0.8),
+             keywords="relief cube"),
+    ShapeDef("block.circle", "Cercle", BLOCK, _b_ellipse, (22, 22)),
+    ShapeDef("block.cylinder", "Cylindre", BLOCK, _b_cylinder, (20, 28), keywords="tube stockage"),
+    ShapeDef("block.arrow", "Flèche simple", BLOCK, _poly(_arrow_pts("right")), (30, 14),
+             keywords="flèche direction"),
+    ShapeDef("block.brace", "Accolade", BLOCK, _unit(_b_brace), (8, 40), (), outline_visible=False,
+             style={"fill": "", "themed": False}, text_rect=(-3.2, 0, 3, 1), label_outside=True,
+             keywords="accolade regroupement"),
+
+    # Base de données (entité-relation, notation de Chen et tables)
+    ShapeDef("db.entity", "Entité", DB, _unit(_b_entity), (40, 30), SIDES_AND_CORNERS,
+             text_rect=(0, 0, 1, 0.28), text={"bold": True}, default_text="Entité", keywords="table er"),
+    ShapeDef("db.weak_entity", "Entité faible", DB, _unit(_b_weak_entity), (35, 16), default_text="Entité"),
+    ShapeDef("db.relationship", "Relation", DB, _unit(lambda: (_diamond(), None)), (30, 18),
+             default_text="Relation", keywords="association losange"),
+    ShapeDef("db.attribute", "Attribut", DB, _b_ellipse, (28, 14), style=dict(_WHITE),
+             text={"color": "#262626"}, default_text="Attribut", keywords="champ colonne"),
+    ShapeDef("db.table", "Table", DB, _unit(_b_entity), (45, 40), SIDES_AND_CORNERS,
+             text_rect=(0, 0, 1, 0.28), text={"bold": True}, default_text="Table", keywords="sql colonne"),
+    ShapeDef("db.view", "Vue", DB, _unit(_b_view), (45, 35), SIDES_AND_CORNERS,
+             text_rect=(0, 0, 1, 0.28), text={"bold": True, "italic": True}, default_text="Vue",
+             keywords="requête sql"),
+
+    # Chronologie
+    ShapeDef("time.line", "Chronologie", TIMELINE, _unit(_b_timeline), (200, 8), ((0, 0.5), (1, 0.5)),
+             text_rect=(0, 1.3, 1, 2.5), label_outside=True, keywords="frise ligne temps calendrier"),
+    ShapeDef("time.milestone", "Jalon", TIMELINE, _unit(lambda: (_diamond(), None)), (8, 8),
+             text_rect=(-2.5, -2.4, 6, 2.2), label_outside=True, style={"fill": "#c55a11", "line": "#843c0c",
+                                                                         "themed": False},
+             default_text="Jalon", keywords="étape date échéance"),
+    ShapeDef("time.interval", "Intervalle", TIMELINE, _unit(_b_interval), (50, 8),
+             style={"transparency": 35.0}, default_text="Intervalle", keywords="période durée"),
+    ShapeDef("time.today", "Aujourd'hui", TIMELINE, _unit(_b_pointer), (6, 8), text_rect=(-3, -2.2, 7, 2),
+             label_outside=True, style={"fill": "#c00000", "line": "#c00000", "themed": False},
+             default_text="Aujourd'hui", keywords="maintenant marqueur"),
+]
+
 _CFF_STYLE = {"fill": "#dce6f2", "line": "#7f9cc9", "themed": False}
 _CFF_TEXT = {"color": "#1f3864", "size": 12.0}
 _DEFS += [
@@ -1001,8 +1105,33 @@ _DEFS += [
              default_text="Titre du diagramme", cff="frame_v"),
 ]
 
+def _b_container_band():
+    return _rect(0, 0, 1, 1), _rect(0, 0, 1, 0.14)
+
+
+def _b_container_round():
+    return _rrect(0, 0, 1, 1, 0.04), _lines([(0, 0.14), (1, 0.14)])
+
+
+# Styles de conteneur (Insertion > Conteneur, onglet « Format du conteneur ») : mêmes
+# règles que le conteneur classique, présentation différente.
+CONTAINER_STYLES = (("basic.container", "Classique"), ("container.band", "Bandeau"),
+                    ("container.rounded", "Arrondi"), ("container.plain", "Simple"))
+_CONTAINER_TEXT = {"bold": True, "valign": "middle", "halign": "left"}
+
 # Formes non présentées dans les gabarits mais nécessaires (images, import VSDX).
 _HIDDEN: list[ShapeDef] = [
+    ShapeDef("container.band", "Conteneur à bandeau", "", _unit(_b_container_band), (90, 60), SIDES_AND_CORNERS,
+             text_rect=(0, 0, 1, 0.14), style={"fill": "#ffffff", "line": "#2f5597", "themed": False},
+             text={**_CONTAINER_TEXT, "color": "#ffffff"}, detail_fill=True, container=True,
+             default_text="Conteneur"),
+    ShapeDef("container.rounded", "Conteneur arrondi", "", _unit(_b_container_round), (90, 60),
+             SIDES_AND_CORNERS, text_rect=(0, 0, 1, 0.14),
+             style={"fill": "#f7f9fc", "line": "#7f9cc9", "themed": False},
+             text={**_CONTAINER_TEXT, "color": "#1f3864"}, container=True, default_text="Conteneur"),
+    ShapeDef("container.plain", "Conteneur simple", "", _b_rect, (90, 60), SIDES_AND_CORNERS,
+             text_rect=(0, 0, 1, 0.14), style={"fill": "", "line": "#7f7f7f", "dash": "dash", "themed": False},
+             text={**_CONTAINER_TEXT, "color": "#404040"}, container=True, default_text="Conteneur"),
     ShapeDef("special.image", "Image", "", _b_rect, (40, 30), SIDES_AND_CORNERS,
              style=dict(_NO_FILL), text_rect=_LABEL_BELOW, label_outside=True),
     ShapeDef("special.custom", "Forme personnalisée", "", _b_rect, (30, 20), SIDES_AND_CORNERS),

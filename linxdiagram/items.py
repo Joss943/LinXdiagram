@@ -171,12 +171,7 @@ class TextOwner(QGraphicsItem):
         self.editing = False
         self._edit_before: dict | None = None
         self._applying = False
-        self.field_scene = None  # page dont les champs sont affichés (pages d'arrière-plan)
         self.label = TextLabel(self)
-
-    def display_text(self) -> str:
-        """Texte affiché : les champs {{…}} sont remplacés par leur valeur."""
-        return fields.expand(self.text, self.field_scene or self.scene(), self)
 
     def state(self) -> dict:  # pragma: no cover - surchargé
         raise NotImplementedError
@@ -187,10 +182,9 @@ class TextOwner(QGraphicsItem):
     def _apply_label_format(self) -> None:
         ts = self.text_style
         lab = self.label
-        if not self.editing:
-            shown = self.display_text()
-            if lab.toPlainText() != shown:
-                lab.setPlainText(shown)
+        shown = self.display_text()
+        if not self.editing and lab.toPlainText() != shown:
+            lab.setPlainText(shown)
         lab.setFont(make_font(ts))
         lab.setDefaultTextColor(QColor(ts["color"]))
         doc = lab.document()
@@ -199,16 +193,20 @@ class TextOwner(QGraphicsItem):
         opt.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
         doc.setDefaultTextOption(opt)
 
+    def display_text(self) -> str:
+        """Texte affiché : les champs ({{page}}, {{date}}…) sont remplacés par leur valeur."""
+        return fields.resolve(self.text, self.scene()) if fields.has_fields(self.text) else self.text
+
     def start_edit(self, select_all: bool = True) -> None:
         sc = self.scene()
         if self.editing or sc is None:
             return
+        if self.label.toPlainText() != self.text:
+            self.label.setPlainText(self.text)  # en édition, les codes de champ sont visibles
         if sc.editing_item is not None and sc.editing_item is not self:
             sc.editing_item.finish_edit()
         self._edit_before = self.state()
         self.editing = True
-        if self.label.toPlainText() != self.text:  # champs : on édite le texte brut
-            self.label.setPlainText(self.text)
         sc.editing_item = self
         self.label.setTextInteractionFlags(Qt.TextInteractionFlag.TextEditorInteraction)
         self.label.setAcceptedMouseButtons(Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton)

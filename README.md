@@ -40,9 +40,12 @@ python -m linxdiagram          # ou run.bat (Windows), run.command (macOS)
 ```
 
 `pip install .` installe aussi la commande `linxdiagram`. Les dossiers de l'application suivent
-chaque système : `~/.local/share` (Linux), `%LOCALAPPDATA%\LinXdiagram` (Windows),
+chaque système : `~/.local/share` et `~/.config` (Linux), `%LOCALAPPDATA%\LinXdiagram` (Windows),
 `~/Library/Application Support/LinXdiagram` (macOS). La variable `LINXDIAGRAM_HOME` les
-regroupe dans un seul dossier (version portable sur clé USB).
+regroupe dans un seul dossier (version portable sur clé USB). Pour l'orthographe sous Windows
+et macOS, copiez les dictionnaires Hunspell (`fr_FR.aff` et `fr_FR.dic`, ceux de LibreOffice)
+dans le sous-dossier `dictionnaires` de ce dossier ; sous macOS, ceux de Homebrew
+(`brew install hunspell`) et de `~/Library/Spelling` sont aussi reconnus.
 
 ## Une interface familière
 
@@ -60,6 +63,8 @@ regroupe dans un seul dossier (version portable sur clé USB).
   plans, logiciel et données, calendrier et ingénierie. Chaque choix ouvre une page vierge avec le
   gabarit de formes et l’orientation adaptés ; les diagrammes interfonctionnels ne contiennent que
   des couloirs vides. Les formes BPMN 2.0 comprennent notamment événements, tâches et passerelles spécialisés.
+* **Gabarits ajoutés** : diagramme de blocs, base de données (entité-relation : entités, relations,
+  attributs, tables, vues) et chronologie (ligne de temps, jalons, intervalles), en plus du BPMN 2.0.
 * **Volets de tâches** : Format de la forme (Remplissage et trait, Effets, Texte, Taille et
   propriétés), Taille et position, Données de forme, Commentaires, Problèmes, Panoramique et zoom,
   et **Explorateur de dessin** avec recherche par texte ou données, filtre par calque, sélection des
@@ -80,15 +85,16 @@ regroupe dans un seul dossier (version portable sur clé USB).
 
 | Onglet | Fonctions |
 |---|---|
-| Accueil | **Espacement automatique** (Position), coller, couper, copier, reproduire la mise en forme ; police, taille, A⁺/A⁻, effacer la mise en forme, gras, italique, souligné, barré, casse ; alignements ; Pointeur, Connecteur, Texte, outils de dessin dont **Stylo à main levée** (Ctrl+7) ; **Styles rapides** (35 styles), Remplissage, Trait (couleur, épaisseur, tirets, flèches), Effets (ombre, lumière, dégradé) ; Aligner, Position, Premier plan, Arrière-plan, Grouper ; **Modifier la forme**, Calques, Sélectionner par type, Rechercher / Remplacer |
-| Insertion | Page vierge, **page d'arrière-plan**, dupliquer, renommer, supprimer ; Images ; Conteneur, Légende, Connecteur ; Lien (web ou page du document) ; Zone de texte, Info-bulle d'écran, Symbole, **Champ** (numéro de page, nombre de pages, nom de la page, date, heure, titre, auteur, nom du fichier, donnée de forme) |
+| Accueil | Coller, couper, copier, reproduire la mise en forme ; police, taille, A⁺/A⁻, effacer la mise en forme, gras, italique, souligné, barré, casse ; alignements ; Pointeur, Connecteur, Texte, outils de dessin (rectangle, ellipse, ligne, forme libre, arc) dont **Stylo à main levée** (Ctrl+7) ; **Styles rapides** (35 styles), Remplissage, Trait (couleur, épaisseur, tirets, flèches), Effets (ombre, lumière, dégradé) ; Aligner, Position (**Aligner automatiquement et espacer**, espacement automatique, distribuer), Premier plan, Arrière-plan, Grouper ; **Modifier la forme**, Calques, Sélectionner par type, Rechercher / Remplacer |
+| Insertion | Page vierge, **page d'arrière-plan** (cartouche, logo, filigrane affichés derrière les pages qui l'utilisent), dupliquer, renommer, supprimer ; Images ; **Conteneur** (entoure la sélection ; onglet contextuel **Format du conteneur** : styles, ajuster au contenu, sélectionner le contenu, désassembler ; déplacer un conteneur déplace ses formes), Légende, Connecteur ; Lien (web ou page du document) ; Zone de texte, Info-bulle d'écran, Symbole ; **Champ** (date, heure, numéro et nombre de pages, nom de page, nom de fichier, titre, auteur), mis à jour automatiquement |
 | Création | Orientation, Taille, **Taille automatique**, Mise en page ; **Thèmes** et **Variantes** ; Arrière-plans, **Bordures et titres** ; **Redisposer la page**, Connecteurs, **sauts de ligne** |
 | Données | **Créer à partir de données** (organigramme ou diagramme de flux depuis un CSV), lier chaque forme à plusieurs fichiers CSV locaux par clé et actualiser toutes les sources à la demande, noms de colonnes préfixés automatiquement en cas de conflit, **graphiques de données** (étiquette et valeur, valeur seule ou pastille de statut avec couleurs configurables), fenêtre Données de forme, **Rapports de forme** (CSV). À l’export VSDX, les graphiques deviennent des annotations vectorielles statiques et séparables dans Visio ; les métadonnées LinXdiagram rétablissent leur association et leurs règles de couleur au réimport. |
 | Processus | **Sous-processus** à partir de la sélection, **Vérifier le diagramme**, fenêtre Problèmes |
 | Diagramme de flux interfonctionnel (contextuel) | Couloir (avant / après), Séparateur, nouveau diagramme horizontal ou vertical, Disposer les couloirs, Orientation du diagramme, Faire pivoter les étiquettes, Styles, Barre de titre, Séparateurs |
-| Révision | **Commentaires** (nouveau, précédent, suivant, supprimer, volet), **verrouiller les formes**, protéger le document |
-| Affichage | **Plein écran** (présentation page par page), règle, grille, grille dynamique, AutoConnect, points de connexion, magnétisme, Zoom, Ajuster à la fenêtre, Largeur de page, Nouvelle fenêtre, Volets des tâches |
-| Développeur | ShapeSheet, **Opérations** sur les formes (Union, Combiner, Fragmenter, Intersection, Soustraire), import / export .vsdx, propriétés du document |
+| Volet Formes | **Mes formes > Favoris** : clic droit > « Ajouter aux Favoris » sur une forme ou une sélection, puis glisser-déposer ; renommer ou supprimer par clic droit dans le volet |
+| Révision | **Orthographe** (F7, dictionnaires Hunspell du système, hors ligne, dictionnaire personnel) ; **Commentaires** (nouveau, précédent, suivant, supprimer, volet), **verrouiller les formes**, protéger le document |
+| Affichage | **Plein écran** (présentation page par page), règle (**repères** tirés des règles, avec aimantation des formes ; les ramener sur la règle ou Suppr les efface), grille, grille dynamique, AutoConnect, points de connexion, magnétisme, Zoom, Ajuster à la fenêtre, Largeur de page, Nouvelle fenêtre, Volets des tâches |
+| Développeur | ShapeSheet ; **Opérations** sur les formes (Union, Combiner, Fragmenter, Intersecter, Soustraire), Forme libre, Arc, Crayon ; import / export .vsdx, propriétés du document |
 
 ### Diagrammes de flux interfonctionnels (couloirs)
 
@@ -125,17 +131,8 @@ collage dynamique ou statique des connecteurs, saisie directe du texte, poignée
 grille dynamique, annulation illimitée, raccourcis clavier de Visio (Ctrl+1/2/3, Ctrl+Maj+F/B,
 Ctrl+Maj+G/U, Ctrl+R/L, Ctrl+H/J, F5…).
 
-Exports : PDF (multipage, vectoriel), PNG, JPEG, SVG, **page web HTML** (toutes les pages, sans
-script), `.vsdx` ; impression avec aperçu.
-
-### Pages d'arrière-plan et champs
-
-Comme dans Visio, une **page d'arrière-plan** (Insertion > Page vierge > Page d'arrière-plan, ou
-Mise en page > Type) affiche ses formes sous celles des pages qui l'utilisent : cartouche, logo,
-pied de page. Elle n'est ni imprimée ni exportée seule, suit les renommages et les boucles sont
-refusées. Les **champs** `{{Page}}`, `{{Pages}}`, `{{Date}}`, `{{Titre}}`… s'affichent avec leur
-valeur ; posés sur un arrière-plan, ils prennent le numéro de la page de premier plan. Les deux
-sont conservés à l'export `.vsdx` (attributs `Background` / `BackPage`) et relus à l'import.
+Exports : PDF (multipage, vectoriel), PNG, JPEG, SVG, **page web HTML** (toutes les pages dans
+un seul fichier, sans script ni ressource externe), `.vsdx` ; impression avec aperçu.
 
 ## Compatibilité Visio (.vsdx)
 
@@ -234,7 +231,6 @@ des connecteurs, la disposition automatique, l'import/export Visio et l'interfac
 | `commands.py`, `document.py` | Annulation/rétablissement, pages, document |
 | `fileformat.py`, `security.py` | Format `.lxd` validé, chiffrement, fichiers |
 | `compat.py` | Différences Linux / Windows / macOS (dossiers, processus, polices) |
-| `fields.py` | Champs de texte (numéro de page, date, propriétés…) |
 | `vsdx.py` | Import/export Microsoft Visio |
 | `export.py` | PDF, PNG, JPEG, SVG, page web, impression |
 | `mainwindow.py`, `panes.py`, `canvas.py`, `backstage.py`, `widgets.py`, `dialogs.py`, `presentation.py` | Interface |

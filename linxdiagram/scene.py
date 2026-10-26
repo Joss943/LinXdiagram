@@ -10,7 +10,7 @@ from PyQt6.QtCore import QLineF, QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen, QPolygonF
 from PyQt6.QtWidgets import QApplication, QGraphicsScene
 
-from . import fields, fileformat, layout, quickstyles, stencils, swimlanes
+from . import fields, fileformat, layout, quickstyles, shapeops, stencils, swimlanes
 from .commands import AddItemsCommand, RemoveItemsCommand, StateCommand, _shapes_first
 from .items import ACCENT, GLUE, ConnectorItem, ShapeItem, TextLabel, make_item
 from .units import GRID_PX, connector_style, connector_text_style, mm_to_px
@@ -39,11 +39,33 @@ def paint_canvas_backdrop(painter: QPainter, rect: QRectF) -> None:
 GRID_MINOR = QColor("#eceff3")
 GRID_MAJOR = QColor("#d7dce3")
 GUIDE = QColor("#d6336c")
+GUIDE_RULER = QColor("#2f6fd6")  # repères tirés des règles
 AC_DIRS = ((0, -1), (1, 0), (0, 1), (-1, 0))
 
 
 def new_id() -> str:
     return secrets.token_hex(6)
+
+
+def _simplify(pts: list, eps: float) -> list:
+    """Ramer-Douglas-Peucker : moins de points pour un tracé à main levée."""
+    if len(pts) < 3:
+        return list(pts)
+    a, b = pts[0], pts[-1]
+    dx, dy = b.x() - a.x(), b.y() - a.y()
+    norm = (dx * dx + dy * dy) ** 0.5
+    best, idx = 0.0, 0
+    for i in range(1, len(pts) - 1):
+        p = pts[i]
+        if norm < 1e-9:
+            d = ((p.x() - a.x()) ** 2 + (p.y() - a.y()) ** 2) ** 0.5
+        else:
+            d = abs(dy * p.x() - dx * p.y() + b.x() * a.y() - b.y() * a.x()) / norm
+        if d > best:
+            best, idx = d, i
+    if best <= eps:
+        return [a, b]
+    return _simplify(pts[:idx + 1], eps)[:-1] + _simplify(pts[idx:], eps)
 
 
 class DiagramScene(QGraphicsScene):
@@ -58,9 +80,17 @@ class DiagramScene(QGraphicsScene):
         self.page_h = page["height"]
         self.page_bg = page["background"]
         self.auto_size = page.get("auto_size", False)
-        self.page_kind = page.get("kind", "foreground")
-        self.backpage = page.get("backpage", "")
         self.layers: list[dict] = [dict(lay) for lay in page.get("layers", [])]
+        # Repères tirés des règles (comme dans Visio) ; les formes s'y aimantent.
+        self.ruler_guides: list[dict] = [dict(g) for g in page.get("guides", [])]
+        # Pages d'arrière-plan (comme Visio) : une page de premier plan peut afficher derrière
+        # son contenu celui d'une page marquée « arrière-plan ».
+        self.is_background = bool(page.get("is_background", False))
+        self.backpage = page.get("backpage", "")
+        self._painting_back = False
+        self.selected_guide: int | None = None
+        self.guide_preview: dict | None = None
+        self._guide_drag: dict | None = None
         self._items: dict[str, ShapeItem | ConnectorItem] = {}
         self._conn_index: dict[str, set[str]] = {}
         self._conn_ends: dict[str, tuple[str, str]] = {}
@@ -86,6 +116,7 @@ class DiagramScene(QGraphicsScene):
         self._jump_pending = False
         self._carry: dict[str, QPointF] = {}
         self._carry_anchor: tuple[str, QPointF] | None = None
+        self._sel_order: list = []  # ordre de sélection : la première forme est la « principale »
         self.selectionChanged.connect(self._on_selection_changed)
         for st in page.get("shapes", []):
             self.add_item_from_state(st)
@@ -132,8 +163,6 @@ class DiagramScene(QGraphicsScene):
         item = make_item(st)
         self.addItem(item)
         self._items[item.id] = item
-        if fields.has_fields(item.text):
-            item.layout_label()
         if item.layer and self.layers:
             lay = self.layer(item.layer)
             if lay is not None:
@@ -191,28 +220,84 @@ class DiagramScene(QGraphicsScene):
     def page_props(self) -> dict:
         return {"name": self.page_name, "width": self.page_w, "height": self.page_h,
                 "background": self.page_bg, "auto_size": self.auto_size,
-                "kind": self.page_kind, "backpage": self.backpage,
-                "layers": [dict(lay) for lay in self.layers]}
+                "layers": [dict(lay) for lay in self.layers],
+                "guides": [dict(g) for g in self.ruler_guides],
+                "is_background": self.is_background, "backpage": self.backpage}
 
     def set_page_props(self, props: dict) -> None:
-        old_name = self.page_name
-        if props["name"] != old_name:
-            # Les pages qui utilisent celle-ci comme arrière-plan suivent le renommage.
-            for p in self.doc.pages:
-                if p is not self and p.backpage == old_name:
-                    p.backpage = props["name"]
         self.page_name = props["name"]
         self.page_w = props["width"]
         self.page_h = props["height"]
         self.page_bg = props["background"]
         self.auto_size = props.get("auto_size", self.auto_size)
-        self.page_kind = props.get("kind", self.page_kind)
-        self.backpage = props.get("backpage", self.backpage)
         self.layers = [dict(lay) for lay in props.get("layers", self.layers)]
+        self.ruler_guides = [dict(g) for g in props.get("guides", self.ruler_guides)]
+        self.is_background = props.get("is_background", self.is_background)
+        self.backpage = props.get("backpage", self.backpage)
+        if self.selected_guide is not None and self.selected_guide >= len(self.ruler_guides):
+            self.selected_guide = None
         self.apply_layers()
         self.update_scene_rect()
         self.update()
         self.doc.pagesChanged.emit()
+
+    def refresh_fields(self) -> None:
+        """Met à jour les champs affichés (numéro de page, date…) après un changement."""
+        for it in self._items.values():
+            if fields.has_fields(it.text) and not it.editing:
+                it.layout_label()
+
+    # ------------------------------------------------------------------ repères
+    def guide_at(self, pos: QPointF) -> int | None:
+        tol = 4.0 / max(self.view_scale, 0.05)
+        best = None
+        for i, g in enumerate(self.ruler_guides):
+            d = abs((pos.y() if g["o"] == "h" else pos.x()) - g["pos"])
+            if d <= tol and (best is None or d < best[0]):
+                best = (d, i)
+        return best[1] if best else None
+
+    def _set_guides(self, guides: list[dict], text: str) -> None:
+        from .commands import PageCommand
+        before = self.page_props()
+        after = dict(before, guides=guides)
+        self.doc.undo_stack.push(PageCommand(self.doc, text, scene=self, before=before, after=after))
+
+    def add_guide(self, orientation: str, pos: float) -> None:
+        self._set_guides(self.ruler_guides + [{"o": orientation, "pos": float(pos)}], "Ajouter un repère")
+        self.selected_guide = len(self.ruler_guides) - 1
+
+    def move_guide(self, index: int, pos: float) -> None:
+        guides = [dict(g) for g in self.ruler_guides]
+        guides[index]["pos"] = float(pos)
+        self._set_guides(guides, "Déplacer un repère")
+
+    def remove_guide(self, index: int) -> None:
+        guides = [g for i, g in enumerate(self.ruler_guides) if i != index]
+        self.selected_guide = None
+        self._set_guides(guides, "Supprimer un repère")
+
+    def _paint_ruler_guides(self, painter: QPainter, rect: QRectF) -> None:
+        s = self.view_scale
+        area = self.sceneRect().united(rect)
+        for i, g in enumerate(self.ruler_guides):
+            if self._guide_drag is not None and self._guide_drag["i"] == i:
+                continue
+            selected = i == self.selected_guide
+            pen = QPen(GUIDE_RULER, (2.0 if selected else 1.0) / s,
+                       Qt.PenStyle.SolidLine if selected else Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            if g["o"] == "h":
+                painter.drawLine(QLineF(area.left(), g["pos"], area.right(), g["pos"]))
+            else:
+                painter.drawLine(QLineF(g["pos"], area.top(), g["pos"], area.bottom()))
+        if self.guide_preview is not None:
+            painter.setPen(QPen(GUIDE_RULER, 1.5 / s))
+            g = self.guide_preview
+            if g["o"] == "h":
+                painter.drawLine(QLineF(area.left(), g["pos"], area.right(), g["pos"]))
+            else:
+                painter.drawLine(QLineF(g["pos"], area.top(), g["pos"], area.bottom()))
 
     # ------------------------------------------------------------------ calques
     def layer(self, name: str) -> dict | None:
@@ -273,72 +358,39 @@ class DiagramScene(QGraphicsScene):
                 "connectors": [i.state() for i in items if isinstance(i, ConnectorItem)]}
 
     # ------------------------------------------------------------------ dessin
-    def background_scene(self):
-        """Page d'arrière-plan affichée sous celle-ci (comme dans Visio), ou None."""
-        if not self.backpage:
+    def backpage_scene(self):
+        """Page d'arrière-plan affectée à cette page (None si aucune)."""
+        if not self.backpage or self.is_background and self.backpage == self.page_name:
             return None
         for p in self.doc.pages:
-            if p is not self and p.page_name == self.backpage and p.page_kind == "background":
+            if p is not self and p.is_background and p.page_name == self.backpage:
                 return p
         return None
 
-    def background_candidates(self) -> list:
-        """Pages d'arrière-plan assignables sans créer de boucle."""
-        out = []
-        for p in self.doc.pages:
-            if p is self or p.page_kind != "background":
-                continue
-            cur, ok, seen = p, True, set()
-            while cur is not None and id(cur) not in seen:
-                if cur is self:
-                    ok = False
-                    break
-                seen.add(id(cur))
-                cur = cur.background_scene()
-            if ok:
-                out.append(p)
-        return out
-
-    _painting_backgrounds: set[int] = set()
-
-    def _paint_background_page(self, painter: QPainter) -> None:
-        bg = self.background_scene()
-        if bg is None or id(bg) in DiagramScene._painting_backgrounds:
+    def _paint_backpage(self, painter: QPainter) -> None:
+        bg = self.backpage_scene()
+        if bg is None or bg._painting_back or self._painting_back:
             return
-        # Rendu « comme à l'export » sans toucher à la sélection de l'autre page : modifier son
-        # état émettrait changed() et relancerait sans fin le dessin des pages dépendantes.
-        DiagramScene._painting_backgrounds.add(id(bg))
-        # Les champs (n° de page…) d'un arrière-plan prennent la valeur de la page affichée.
-        with_fields = [it for it in bg.all_items() if fields.has_fields(it.text)]
-        for it in with_fields:
-            it.field_scene = self
-            it.layout_label()
-        old = bg.exporting, bg.page_bg
-        bg.exporting, bg.page_bg = True, "#00000000"
+        from .export import exporting  # import local : évite un cycle au chargement
+        self._painting_back = True
         try:
-            src = QRectF(0, 0, self.page_w, self.page_h)
-            painter.save()
-            painter.setClipRect(src)
-            bg.render(painter, src, src, Qt.AspectRatioMode.IgnoreAspectRatio)
-            painter.restore()
+            with exporting(bg, transparent=True):
+                src = bg.page_rect()
+                bg.render(painter, QRectF(0, 0, src.width(), src.height()), src)
         finally:
-            bg.exporting, bg.page_bg = old
-            for it in with_fields:
-                it.field_scene = None
-                it.layout_label()
-            DiagramScene._painting_backgrounds.discard(id(bg))
+            self._painting_back = False
 
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:  # noqa: N802
         page = self.page_rect()
         if self.exporting:
             painter.fillRect(rect, QColor(self.page_bg))
-            self._paint_background_page(painter)
+            self._paint_backpage(painter)
             return
         paint_canvas_backdrop(painter, rect)
         s = self.view_scale
         painter.fillRect(page.translated(3 / s, 3 / s), QColor(0, 0, 0, 45))
         painter.fillRect(page, QColor(self.page_bg))
-        self._paint_background_page(painter)
+        self._paint_backpage(painter)
         if self.doc.settings["grid"]:
             area = rect.intersected(page)
             if not area.isEmpty():
@@ -373,7 +425,11 @@ class DiagramScene(QGraphicsScene):
             return
         s = self.view_scale
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        if self._draw is not None:
+        if self._draw is not None and self._draw["tool"] in ("freeform", "arc"):
+            painter.setPen(QPen(ACCENT, 1.5 / s))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(self._draw_path(self._draw))
+        elif self._draw is not None:
             if self._draw["tool"] == "pen":
                 pen = QPen(ACCENT, 2 / s)
                 pen.setCapStyle(Qt.PenCapStyle.RoundCap)
@@ -388,6 +444,8 @@ class DiagramScene(QGraphicsScene):
                     painter.drawEllipse(self._draw["rect"])
                 else:
                     painter.drawRect(self._draw["rect"])
+        if self.ruler_guides or self.guide_preview is not None:
+            self._paint_ruler_guides(painter, rect)
         if self.guides:
             painter.setPen(QPen(GUIDE, 1 / s, Qt.PenStyle.DashLine))
             for line in self.guides:
@@ -611,6 +669,19 @@ class DiagramScene(QGraphicsScene):
                 self.autoconnect(self.hover_shape, d)
                 event.accept()
                 return
+        if tool == "select" and self.ruler_guides:
+            gi = self.guide_at(pos)
+            if gi is not None and self.top_item_at(pos) is None:
+                self.clearSelection()
+                self.selected_guide = gi
+                self._guide_drag = {"i": gi, "start": QPointF(pos)}
+                self.guide_preview = dict(self.ruler_guides[gi])
+                self.update()
+                event.accept()
+                return
+        if self.selected_guide is not None:
+            self.selected_guide = None
+            self.update()
         for item in self.selectedItems():
             if isinstance(item, ConnectorItem):
                 which = item.end_handle_at(pos)
@@ -626,6 +697,11 @@ class DiagramScene(QGraphicsScene):
         if tool in ("rectangle", "ellipse"):
             start = self.snap_point(pos)
             self._draw = {"tool": tool, "start": start, "rect": QRectF()}
+            event.accept()
+            return
+        if tool in ("freeform", "arc"):
+            start = self.snap_point(pos) if tool == "arc" else pos
+            self._draw = {"tool": tool, "start": start, "rect": QRectF(), "points": [start]}
             event.accept()
             return
         if tool == "pen":
@@ -665,6 +741,10 @@ class DiagramScene(QGraphicsScene):
         if isinstance(grabbed, ShapeItem) and grabbed.sdef.cff and grabbed._drag is None:
             self._carry = self._cff_carry(grabbed)
             self._carry_anchor = (grabbed.id, QPointF(grabbed.pos()))
+        elif isinstance(grabbed, ShapeItem) and grabbed.sdef.container and grabbed._drag is None:
+            # Comme dans Visio : déplacer un conteneur déplace les formes qu'il contient.
+            self._carry = {s.id: QPointF(s.pos()) for s in self.container_members(grabbed) if not s.isSelected()}
+            self._carry_anchor = (grabbed.id, QPointF(grabbed.pos()))
         self._capture_press()
 
     def _capture_press(self) -> None:
@@ -682,8 +762,24 @@ class DiagramScene(QGraphicsScene):
     def mouseMoveEvent(self, event):  # noqa: N802
         pos = event.scenePos()
         self._mouse = pos
+        if self._guide_drag is not None:
+            g = self.ruler_guides[self._guide_drag["i"]]
+            p = self.snap_point(pos)
+            self.guide_preview = {"o": g["o"], "pos": p.y() if g["o"] == "h" else p.x()}
+            self.update()
+            event.accept()
+            return
         if self._conn_drag is not None:
             self._update_conn_drag(pos)
+            event.accept()
+            return
+        if self._draw is not None and self._draw["tool"] in ("freeform", "arc"):
+            pts = self._draw["points"]
+            if self._draw["tool"] == "arc":
+                self._draw["points"] = [pts[0], self.snap_point(pos)]
+            elif (pos - pts[-1]).manhattanLength() * self.view_scale > 2:
+                pts.append(pos)
+            self.update()
             event.accept()
             return
         if self._draw is not None:
@@ -725,6 +821,18 @@ class DiagramScene(QGraphicsScene):
     def mouseReleaseEvent(self, event):  # noqa: N802
         pos = event.scenePos()
         self._mouse = pos
+        if self._guide_drag is not None:
+            d, self._guide_drag = self._guide_drag, None
+            preview, self.guide_preview = self.guide_preview, None
+            views = self.views()
+            visible = views[0].mapToScene(views[0].viewport().rect()).boundingRect() if views else None
+            if visible is not None and not visible.contains(pos):
+                self.remove_guide(d["i"])          # ramené sur la règle : supprimé, comme dans Visio
+            elif preview is not None and (pos - d["start"]).manhattanLength() * self.view_scale > 2:
+                self.move_guide(d["i"], preview["pos"])
+            self.update()
+            event.accept()
+            return
         if self._conn_drag is not None:
             self._finish_conn_drag(pos)
             event.accept()
@@ -899,6 +1007,19 @@ class DiagramScene(QGraphicsScene):
                         d = vy - y
                         if abs(d) <= tol and (adj_y is None or abs(d) < abs(adj_y)):
                             adj_y, hit_y = d, (vy, ob)
+        if self.ruler_guides:
+            tol = GUIDE_TOL_PX / s
+            for gd in self.ruler_guides:
+                refs = (box.left(), box.center().x(), box.right()) if gd["o"] == "v" else \
+                    (box.top(), box.center().y(), box.bottom())
+                for v in refs:
+                    d = gd["pos"] - v
+                    if abs(d) > tol:
+                        continue
+                    if gd["o"] == "v" and (adj_x is None or abs(d) < abs(adj_x)):
+                        adj_x, hit_x = d, None
+                    elif gd["o"] == "h" and (adj_y is None or abs(d) < abs(adj_y)):
+                        adj_y, hit_y = d, None
         if self.snap_enabled:
             square = abs(round(g.rotation() / 90.0) * 90.0 - g.rotation()) < 0.01
             ref_x = box.left() if square else box.center().x()
@@ -986,9 +1107,68 @@ class DiagramScene(QGraphicsScene):
                 self.push_state({conn.id: d["before"]}, {conn.id: after}, "Recoller le connecteur")
         self.update()
 
+    @staticmethod
+    def _draw_path(d: dict) -> QPainterPath:
+        """Tracé du Crayon, de la Forme libre ou de l'Arc dans le repère de la page."""
+        pts = d["points"]
+        p = QPainterPath(pts[0])
+        if d["tool"] == "arc":
+            if len(pts) > 1:
+                a, b = pts[0], pts[-1]
+                # Quart d'ellipse, comme l'outil Arc de Visio : part verticalement, arrive horizontalement.
+                k = 0.5523
+                p.cubicTo(QPointF(a.x(), a.y() + (b.y() - a.y()) * k),
+                          QPointF(b.x() - (b.x() - a.x()) * k, b.y()), b)
+            return p
+        pts = _simplify(pts, 1.2)
+        if len(pts) > 2:
+            # Lissage : courbes passant par le milieu des segments.
+            for i in range(1, len(pts) - 1):
+                mid = (pts[i] + pts[i + 1]) / 2
+                p.quadTo(pts[i], mid)
+            p.lineTo(pts[-1])
+        else:
+            for pt in pts[1:]:
+                p.lineTo(pt)
+        if d["tool"] == "freeform":
+            p.closeSubpath()
+        return p
+
+    def _finish_freehand(self, d: dict) -> None:
+        path = self._draw_path(d)
+        r = path.boundingRect()
+        if max(r.width(), r.height()) * self.view_scale < 6:
+            return
+        r = r.adjusted(-0.5, -0.5, 0.5, 0.5)
+        _r, cmds = shapeops.to_commands(path)
+        # to_commands normalise sur le rectangle exact : on recalcule sur le rectangle élargi.
+        box = path.boundingRect()
+        sx = box.width() / r.width() if r.width() else 1.0
+        sy = box.height() / r.height() if r.height() else 1.0
+        ox, oy = (box.left() - r.left()) / r.width(), (box.top() - r.top()) / r.height()
+        fixed = []
+        for cmd in cmds:
+            vals = cmd[1:]
+            fixed.append([cmd[0]] + [round(ox + v * sx, 6) if k % 2 == 0 else round(oy + v * sy, 6)
+                                     for k, v in enumerate(vals)])
+        if d["tool"] != "freeform":
+            fixed = [c for c in fixed if c[0] != "Z"]
+        st = self.new_shape_state("special.custom", r.center(), r.width(), r.height(), snap=False)
+        st["path"] = fixed
+        st["text"] = ""
+        if d["tool"] != "freeform":
+            st["style"].update(fill="", themed=False)
+            st["style"]["line"] = st["style"]["line"] or "#000000"
+        names = {"freeform": "Forme libre", "arc": "Arc"}
+        self.add_states([st], names[d["tool"]])
+
     def _finish_draw(self) -> None:
         d = self._draw
         self._draw = None
+        if d["tool"] in ("freeform", "arc"):
+            self.update()
+            self._finish_freehand(d)
+            return
         self.update()
         if d["tool"] == "pen":
             points = d["points"]
@@ -1035,6 +1215,7 @@ class DiagramScene(QGraphicsScene):
     # ------------------------------------------------------------------ sélection
     def _on_selection_changed(self) -> None:
         sel = self.selectedItems()
+        self._sel_order = [i for i in self._sel_order if i in sel] + [i for i in sel if i not in self._sel_order]
         prev = self.single_selected
         self.single_selected = sel[0] if len(sel) == 1 else None
         for it in sel:
@@ -1291,6 +1472,96 @@ class DiagramScene(QGraphicsScene):
             st["y"] += dy
         self.modify(shapes, al, "Aligner")
 
+    # ------------------------------------------------------------------ opérations sur les formes
+    def shape_operation(self, op: str) -> bool:
+        """Union, Combiner, Fragmenter, Intersecter, Soustraire (Développeur > Opérations)."""
+        shapes = [s for s in self.selected_shapes() if not s.locked and not s.sdef.cff]
+        if len(shapes) < 2:
+            return False
+        order = [s for s in self._sel_order if s in shapes] + [s for s in shapes if s not in self._sel_order]
+        paths = [s.sceneTransform().map(s._outline) for s in order]
+        results = shapeops.apply(op, paths)
+        ref = order[0].state()
+        states = []
+        for path in results:
+            r, cmds = shapeops.to_commands(path)
+            if len(cmds) < 2 or len(cmds) > fileformat.MAX_PATH_COMMANDS or r.width() < 1 or r.height() < 1:
+                continue
+            st = self.new_shape_state("special.custom", r.center(), r.width(), r.height(), snap=False)
+            st.update(path=cmds, style=dict(ref["style"]), text_style=dict(ref["text_style"]),
+                      z=ref["z"] + len(states) * 0.001, layer=ref.get("layer", ""),
+                      text=ref["text"] if op != "fragment" else "")
+            states.append(st)
+        if not states:
+            return False
+        label = shapeops.OPERATIONS[op]
+        self.doc.undo_stack.beginMacro(label)
+        try:
+            self.delete_items(order, label)
+            self.add_states(states, label)
+        finally:
+            self.doc.undo_stack.endMacro()
+        self.select_items([self._items[st["id"]] for st in states if st["id"] in self._items])
+        return True
+
+    def auto_align_space(self, align: bool = True, space: bool = True) -> None:
+        """« Aligner automatiquement et espacer » : les formes reliées presque alignées le
+        deviennent, et les écarts le long des colonnes et des lignes sont égalisés."""
+        shapes = [s for s in (self.selected_shapes() or self.shapes())
+                  if not s.sdef.cff and not s.sdef.container and not s.locked]
+        ids = {s.id: s for s in shapes}
+        if len(ids) < 2:
+            return
+        c = {i: s.scene_box().center() for i, s in ids.items()}
+        size = {i: s.scene_box() for i, s in ids.items()}
+        tol = mm_to_px(20)
+        parent = {"col": {i: i for i in ids}, "row": {i: i for i in ids}}
+
+        def find(kind, i):
+            while parent[kind][i] != i:
+                parent[kind][i] = parent[kind][parent[kind][i]]
+                i = parent[kind][i]
+            return i
+        for conn in self.connectors():
+            a, b = conn.src.get("shape"), conn.dst.get("shape")
+            if a not in ids or b not in ids or a == b:
+                continue
+            dx, dy = abs(c[a].x() - c[b].x()), abs(c[a].y() - c[b].y())
+            kind = "col" if dx <= dy else "row"
+            if min(dx, dy) < tol:
+                parent[kind][find(kind, a)] = find(kind, b)
+        x = {i: c[i].x() for i in ids}
+        y = {i: c[i].y() for i in ids}
+        for kind in ("col", "row"):
+            groups: dict[str, list[str]] = {}
+            for i in ids:
+                groups.setdefault(find(kind, i), []).append(i)
+            for members in groups.values():
+                if len(members) < 2:
+                    continue
+                if align:
+                    vals = sorted((x if kind == "col" else y)[i] for i in members)
+                    med = vals[len(vals) // 2]
+                    for i in members:
+                        (x if kind == "col" else y)[i] = med
+                if space:
+                    axis = y if kind == "col" else x
+                    members.sort(key=lambda i: axis[i])
+                    ext = (lambda i: size[i].height()) if kind == "col" else (lambda i: size[i].width())
+                    gaps = [axis[b] - ext(b) / 2 - (axis[a] + ext(a) / 2) for a, b in zip(members, members[1:])]
+                    gap = max(mm_to_px(8), sum(gaps) / len(gaps))
+                    pos = axis[members[0]] + ext(members[0]) / 2
+                    for i in members[1:]:
+                        axis[i] = pos + gap + ext(i) / 2
+                        pos = axis[i] + ext(i) / 2
+        labels = {(True, True): "Aligner automatiquement et espacer", (True, False): "Aligner automatiquement",
+                  (False, True): "Espacement automatique"}
+
+        def fn(it, st):
+            st["x"] += x[it.id] - c[it.id].x()
+            st["y"] += y[it.id] - c[it.id].y()
+        self.modify(list(ids.values()), fn, labels[(align, space)])
+
     def distribute(self, axis: str) -> None:
         shapes = self.selected_shapes()
         if len(shapes) < 3:
@@ -1316,167 +1587,6 @@ class DiagramScene(QGraphicsScene):
             else:
                 st["y"] += targets[it.id]
         self.modify(shapes, dist, "Distribuer")
-
-    # ------------------------------------------------------------------ opérations sur les formes
-    SHAPE_OPERATIONS = {"union": "Union", "combine": "Combiner", "fragment": "Fragmenter",
-                        "intersect": "Intersection", "subtract": "Soustraire"}
-
-    @staticmethod
-    def path_commands(path: QPainterPath, rect: QRectF) -> list:
-        """Convertit un chemin en commandes normalisées d'une forme personnalisée."""
-        w, h = max(rect.width(), 1e-6), max(rect.height(), 1e-6)
-
-        def nx(x):
-            return (x - rect.left()) / w
-
-        def ny(y):
-            return (y - rect.top()) / h
-
-        out: list = []
-        start = None
-        last = None
-        i, n = 0, path.elementCount()
-        ET = QPainterPath.ElementType
-        while i < n and len(out) < fileformat.MAX_PATH_COMMANDS - 2:
-            e = path.elementAt(i)
-            if e.type == ET.MoveToElement:
-                if start is not None and last is not None and \
-                        abs(last[0] - start[0]) < 1e-6 and abs(last[1] - start[1]) < 1e-6:
-                    out.append(["Z"])
-                start = last = (e.x, e.y)
-                out.append(["M", nx(e.x), ny(e.y)])
-                i += 1
-            elif e.type == ET.LineToElement:
-                last = (e.x, e.y)
-                out.append(["L", nx(e.x), ny(e.y)])
-                i += 1
-            elif e.type == ET.CurveToElement and i + 2 < n:
-                c2, end = path.elementAt(i + 1), path.elementAt(i + 2)
-                last = (end.x, end.y)
-                out.append(["C", nx(e.x), ny(e.y), nx(c2.x), ny(c2.y), nx(end.x), ny(end.y)])
-                i += 3
-            else:
-                i += 1
-        if start is not None and last is not None and \
-                abs(last[0] - start[0]) < 1e-6 and abs(last[1] - start[1]) < 1e-6:
-            out.append(["Z"])
-        return out
-
-    def _operation_paths(self, op: str, paths: list[QPainterPath]) -> list[QPainterPath]:
-        base, others = paths[0], paths[1:]
-        if op == "union":
-            result = QPainterPath(base)
-            for p in others:
-                result = result.united(p)
-            return [result.simplified()]
-        if op == "combine":
-            # Les zones superposées deviennent des trous (règle pair-impair), comme dans Visio.
-            result = QPainterPath(base)
-            for p in others:
-                result.addPath(p)
-            result.setFillRule(Qt.FillRule.OddEvenFill)
-            return [result]
-        if op == "intersect":
-            result = QPainterPath(base)
-            for p in others:
-                result = result.intersected(p)
-            return [result.simplified()]
-        if op == "subtract":
-            result = QPainterPath(base)
-            for p in others:
-                result = result.subtracted(p)
-            return [result.simplified()]
-        # Fragmenter : découpe en morceaux à chaque chevauchement.
-        pieces: list[QPainterPath] = []
-        covered = QPainterPath()
-        for p in paths:
-            nxt = []
-            for r in pieces:
-                nxt.append(r.intersected(p))
-                nxt.append(r.subtracted(p))
-            nxt.append(p.subtracted(covered))
-            covered = covered.united(p)
-            pieces = [r.simplified() for r in nxt if not r.isEmpty()]
-        return pieces
-
-    def shape_operation(self, op: str) -> int:
-        """Union, Combiner, Fragmenter, Intersection ou Soustraire (onglet Développeur de Visio).
-
-        La forme la plus en arrière sert de base : elle donne son style et son texte au résultat,
-        et c'est d'elle que les autres sont soustraites."""
-        shapes = [s for s in self.selected_shapes()
-                  if not s.locked and not s.sdef.cff and s.type_id != "special.image"]
-        need = 1 if op == "fragment" else 2
-        if len(shapes) < need:
-            return 0
-        shapes.sort(key=lambda s: s.zValue())
-        paths = []
-        for s in shapes:
-            p = s.mapToScene(s._outline)
-            p.setFillRule(Qt.FillRule.WindingFill)
-            paths.append(p.simplified())
-        results = [p for p in self._operation_paths(op, paths)
-                   if not p.isEmpty() and p.boundingRect().width() * p.boundingRect().height() > 1]
-        base = shapes[0]
-        states = []
-        for k, path in enumerate(results):
-            rect = path.boundingRect()
-            if rect.width() < 1 or rect.height() < 1:
-                continue
-            commands = self.path_commands(path, rect)
-            if len(commands) < 2:
-                continue
-            st = self.new_shape_state("special.custom", rect.center(), rect.width(), rect.height(),
-                                      snap=False)
-            st["path"] = commands
-            st["style"] = dict(base.style, rounding=0)
-            st["text_style"] = dict(base.text_style)
-            st["text"] = base.text if k == 0 else ""
-            st["layer"] = base.layer
-            st["z"] = base.zValue() + k * 0.001
-            states.append(st)
-        if not states:
-            return 0
-        text = self.SHAPE_OPERATIONS.get(op, "Opération")
-        self.doc.undo_stack.beginMacro(text)
-        self._delete_now(shapes, text)
-        self.add_states(states, text)
-        self.doc.undo_stack.endMacro()
-        return len(states)
-
-    # ------------------------------------------------------------------ espacement automatique
-    def auto_space(self, gap_mm: float = 7.5) -> bool:
-        """« Espacement automatique » : aligne les formes sur leur axe dominant et les espace
-        régulièrement. Sans sélection, s'applique à toutes les formes de la page."""
-        shapes = [s for s in (self.selected_shapes() or self.shapes())
-                  if not s.locked and not s.sdef.cff and not s.sdef.container]
-        if len(shapes) < 2:
-            return False
-        boxes = {s.id: s.scene_box() for s in shapes}
-        xs = [b.center().x() for b in boxes.values()]
-        ys = [b.center().y() for b in boxes.values()]
-        horiz = (max(xs) - min(xs)) >= (max(ys) - min(ys))
-        shapes.sort(key=lambda s: boxes[s.id].center().x() if horiz else boxes[s.id].center().y())
-        gap = mm_to_px(gap_mm)
-        first = boxes[shapes[0].id]
-        axis = first.center().y() if horiz else first.center().x()
-        cur = first.left() if horiz else first.top()
-        targets = {}
-        for s in shapes:
-            b = boxes[s.id]
-            if horiz:
-                targets[s.id] = (cur - b.left(), axis - b.center().y())
-                cur += b.width() + gap
-            else:
-                targets[s.id] = (axis - b.center().x(), cur - b.top())
-                cur += b.height() + gap
-
-        def sp(it, st):
-            dx, dy = targets[it.id]
-            st["x"] += dx
-            st["y"] += dy
-        self.modify(shapes, sp, "Espacement automatique")
-        return True
 
     def rotate_selection(self, degrees: float) -> None:
         def rot(it, st):
@@ -1903,6 +2013,71 @@ class DiagramScene(QGraphicsScene):
             st["text_style"]["color"] = preset[role + "_text"]
         self.modify(frames + lanes + phases, fn, "Style interfonctionnel")
 
+    # ------------------------------------------------------------------ conteneurs (Visio)
+    @staticmethod
+    def is_plain_container(s) -> bool:
+        return isinstance(s, ShapeItem) and s.sdef.container and not s.sdef.cff
+
+    def container_members(self, c: ShapeItem) -> list[ShapeItem]:
+        """Formes posées dans le conteneur (centre à l'intérieur, au-dessus de lui)."""
+        box = c.scene_box()
+        return [s for s in self.shapes() if s is not c and not s.sdef.cff and s.zValue() > c.zValue()
+                and box.contains(s.scene_box().center())]
+
+    def containers_of(self, s: ShapeItem) -> list[ShapeItem]:
+        c = s.scene_box().center()
+        return [o for o in self.shapes() if self.is_plain_container(o) and o is not s
+                and o.zValue() < s.zValue() and o.scene_box().contains(c)]
+
+    def container_fit(self, c: ShapeItem, margin_mm: float = 6.0) -> bool:
+        """« Ajuster au contenu » : le conteneur entoure exactement ses formes."""
+        members = self.container_members(c)
+        if not members:
+            return False
+        r = members[0].scene_box()
+        for m in members[1:]:
+            r = r.united(m.scene_box())
+        m = mm_to_px(margin_mm)
+        f = c.text_rect_norm()[3] if c.sdef.text_rect[1] == 0 else 0.0
+        h = (r.height() + 2 * m) / max(0.2, 1.0 - f)
+        w = r.width() + 2 * m
+        top = r.top() - m - f * h
+        self.modify([c], lambda _i, st: st.update(x=r.left() - m + w / 2, y=top + h / 2, w=w, h=h, rotation=0.0),
+                    "Ajuster au contenu")
+        return True
+
+    def container_disband(self, c: ShapeItem) -> None:
+        """« Désassembler le conteneur » : supprime le cadre, garde les formes."""
+        self.delete_items([c], "Désassembler le conteneur")
+
+    def container_select_contents(self, c: ShapeItem) -> None:
+        self.select_items(self.container_members(c))
+
+    def wrap_in_container(self, type_id: str, style: dict | None = None, text_style: dict | None = None):
+        """Insertion > Conteneur avec une sélection : le conteneur entoure les formes choisies."""
+        shapes = [s for s in self.selected_shapes() if not s.sdef.cff]
+        if not shapes:
+            return None
+        r = shapes[0].scene_box()
+        for s in shapes[1:]:
+            r = r.united(s.scene_box())
+        m = mm_to_px(6)
+        sdef = stencils.get(type_id)
+        f = sdef.text_rect[3]
+        h = (r.height() + 2 * m) / (1.0 - f)
+        w = r.width() + 2 * m
+        st = self.new_shape_state(type_id, QPointF(r.left() - m + w / 2, r.top() - m - f * h + h / 2), w, h,
+                                  snap=False)
+        st["z"] = min(s.zValue() for s in shapes) - 1.0
+        if style:
+            st["style"].update(style, themed=False)
+        if text_style:
+            st["text_style"].update(text_style)
+        self.add_states([st], "Insérer un conteneur")
+        item = self.item_by_id(st["id"])
+        self.select_items([item])
+        return item
+
     def cff_memberships(self) -> dict[str, list[str]]:
         """Appartenance aux cadres, couloirs et phases, pour l'export Visio."""
         out: dict[str, list[str]] = {}
@@ -1916,6 +2091,11 @@ class DiagramScene(QGraphicsScene):
                                       others)
             for k, v in m.items():
                 out.setdefault(k, []).extend(c for c in v if c not in out.get(k, []))
+        for c in self.shapes():
+            if self.is_plain_container(c):
+                for s in self.container_members(c):
+                    if c.id not in out.setdefault(s.id, []):
+                        out[s.id].append(c.id)
         return out
 
     def cff_layout(self, text: str = "Disposer les couloirs", prefer: str | None = None) -> None:

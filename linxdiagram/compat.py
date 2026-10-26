@@ -81,6 +81,17 @@ def runtime_dir() -> str:
     return os.path.join(base, "linxdiagram-ui")
 
 
+def config_dir() -> str:
+    """Fichiers de configuration écrits par l'application (dictionnaire personnel)."""
+    if (o := _override("config")):
+        return o
+    if IS_WINDOWS:
+        return _windows_base()
+    if IS_MACOS:
+        return _mac("Application Support")
+    return _xdg("XDG_CONFIG_HOME", "~/.config")
+
+
 def documents_dir() -> str:
     for name in ("Documents", "Mes documents"):
         path = os.path.join(os.path.expanduser("~"), name)

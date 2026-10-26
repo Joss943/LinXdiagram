@@ -473,50 +473,6 @@ def _buttons(dlg, ok_text: str = "OK") -> QDialogButtonBox:
     return b
 
 
-class FieldDialog(QDialog):
-    """Insertion > Champ : choix d'un champ mis à jour automatiquement, avec aperçu."""
-
-    def __init__(self, parent, scene):
-        super().__init__(parent)
-        from . import fields
-        self._fields = fields
-        self._scene = scene
-        shapes = scene.selected_shapes()
-        self._shape = shapes[0] if len(shapes) == 1 else None
-        self.setWindowTitle("Champ")
-        self.setMinimumWidth(420)
-        lay = QVBoxLayout(self)
-        lay.addWidget(QLabel("Catégorie et nom du champ :"))
-        self.list = QListWidget()
-        for name, desc in fields.FIELDS:
-            it = QListWidgetItem(desc)
-            it.setData(Qt.ItemDataRole.UserRole, name)
-            self.list.addItem(it)
-        if self._shape is not None:
-            for key in sorted(self._shape.data):
-                it = QListWidgetItem(f"Donnée de forme : {key}")
-                it.setData(Qt.ItemDataRole.UserRole, fields.DATA_PREFIX + key)
-                self.list.addItem(it)
-        self.list.setCurrentRow(0)
-        lay.addWidget(self.list)
-        self.preview = QLabel()
-        self.preview.setTextFormat(Qt.TextFormat.PlainText)
-        lay.addWidget(self.preview)
-        self.list.currentItemChanged.connect(lambda *_: self._update())
-        self.list.itemDoubleClicked.connect(lambda *_: self.accept())
-        lay.addWidget(_buttons(self, "Insérer"))
-        self._update()
-
-    def field(self) -> str:
-        it = self.list.currentItem()
-        return it.data(Qt.ItemDataRole.UserRole) if it is not None else ""
-
-    def _update(self) -> None:
-        name = self.field()
-        value = self._fields.expand(self._fields.token(name), self._scene, self._shape) if name else ""
-        self.preview.setText(f"Aperçu : {value}")
-
-
 class ZoomDialog(QDialog):
     PRESETS = ((4.0, "400 %"), (2.0, "200 %"), (1.5, "150 %"), (1.0, "100 %"), (0.75, "75 %"),
                (0.5, "50 %"), ("page", "Page entière"), ("width", "Largeur de page"))
@@ -724,20 +680,6 @@ class PageSetupDialog(QDialog):
         self.auto = QCheckBox("Agrandir automatiquement la page")
         self.auto.setChecked(scene.auto_size)
         form.addRow("", self.auto)
-        # Propriétés de la page, comme dans Visio : type et page d'arrière-plan.
-        self.kind = QComboBox()
-        self.kind.addItem("Premier plan", "foreground")
-        self.kind.addItem("Arrière-plan", "background")
-        self.kind.setCurrentIndex(1 if scene.page_kind == "background" else 0)
-        form.addRow("Type :", self.kind)
-        self.backpage = QComboBox()
-        self.backpage.addItem("Aucun", "")
-        for p in scene.background_candidates():
-            self.backpage.addItem(p.page_name, p.page_name)
-        idx = self.backpage.findData(scene.backpage)
-        self.backpage.setCurrentIndex(max(0, idx))
-        self.backpage.setToolTip("Page dont les formes s'affichent sous celles de cette page.")
-        form.addRow("Arrière-plan :", self.backpage)
         self.bg = scene.page_bg
         self.fmt.setCurrentIndex(self.fmt.count() - 1)
         for i in range(self.fmt.count() - 1):
@@ -766,8 +708,7 @@ class PageSetupDialog(QDialog):
     def props(self, base: dict) -> dict:
         return dict(base, name=security.clean_line(self.name.text(), 100) or base["name"],
                     width=self.w.value() * self._px, height=self.h.value() * self._px,
-                    auto_size=self.auto.isChecked(), kind=self.kind.currentData(),
-                    backpage=self.backpage.currentData() or "")
+                    auto_size=self.auto.isChecked())
 
 
 class DataImportDialog(QDialog):
@@ -1006,3 +947,173 @@ class DataLinkDialog(QDialog):
         self.preview.setText(message)
         self.preview.setStyleSheet("color: #b42318;" if not valid else "color: #16803c;")
         self.buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(valid)
+
+
+class FieldDialog(QDialog):
+    """Insertion > Champ : choix d'un champ avec aperçu de sa valeur actuelle."""
+
+    def __init__(self, parent, scene):
+        super().__init__(parent)
+        from . import fields
+        self.setWindowTitle("Champ")
+        self.setMinimumWidth(420)
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel("Catégorie de champ et valeur actuelle :"))
+        self.list = QListWidget()
+        vals = fields.values(scene)
+        for key, label in fields.FIELDS.items():
+            value = vals.get(key) or "(vide)"
+            it = QListWidgetItem(f"{label}  —  {value}")
+            it.setData(Qt.ItemDataRole.UserRole, key)
+            self.list.addItem(it)
+        self.list.setCurrentRow(0)
+        self.list.itemDoubleClicked.connect(lambda _it: self.accept())
+        lay.addWidget(self.list)
+        hint = QLabel("Le champ se met à jour automatiquement. En modification de texte, il apparaît sous "
+                      "la forme {{nom}}.")
+        hint.setWordWrap(True)
+        hint.setObjectName("Hint")
+        lay.addWidget(hint)
+        lay.addWidget(_buttons(self))
+
+    def field(self) -> str:
+        it = self.list.currentItem()
+        return it.data(Qt.ItemDataRole.UserRole) if it else "date"
+
+
+class SpellDialog(QDialog):
+    """Révision > Orthographe (F7) : parcourt les textes du document, comme dans Visio."""
+
+    def __init__(self, window, checker, targets: list):
+        super().__init__(window)
+        import re
+        self._re = re
+        self.win = window
+        self.checker = checker
+        self.targets = targets          # [(scène, objet)]
+        self.index = 0
+        self.offset = 0
+        self.current = None             # (scène, objet, début, fin, mot)
+        self.changes = 0
+        self.setWindowTitle("Orthographe")
+        self.setMinimumWidth(460)
+        lay = QVBoxLayout(self)
+        self.where = QLabel()
+        self.where.setObjectName("Hint")
+        lay.addWidget(self.where)
+        lay.addWidget(QLabel("Absent du dictionnaire :"))
+        self.context = QLabel()
+        self.context.setWordWrap(True)
+        self.context.setTextFormat(Qt.TextFormat.RichText)
+        self.context.setStyleSheet("padding: 6px; border: 1px solid palette(mid); border-radius: 4px;")
+        lay.addWidget(self.context)
+        row = QFormLayout()
+        self.replacement = QLineEdit()
+        row.addRow("Remplacer par :", self.replacement)
+        lay.addLayout(row)
+        lay.addWidget(QLabel("Suggestions :"))
+        self.suggestions = QListWidget()
+        self.suggestions.setMaximumHeight(140)
+        self.suggestions.currentTextChanged.connect(lambda t: t and self.replacement.setText(t))
+        self.suggestions.itemDoubleClicked.connect(lambda _it: self._change())
+        lay.addWidget(self.suggestions)
+        buttons = QHBoxLayout()
+        for text, slot in (("Ignorer", self._ignore), ("Ignorer tout", self._ignore_all),
+                           ("Ajouter au dictionnaire", self._add), ("Modifier", self._change),
+                           ("Modifier tout", self._change_all)):
+            b = QPushButton(text)
+            b.clicked.connect(slot)
+            buttons.addWidget(b)
+            if text == "Modifier":
+                b.setDefault(True)
+        lay.addLayout(buttons)
+        close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close.rejected.connect(self.reject)
+        close.button(QDialogButtonBox.StandardButton.Close).setText("Fermer")
+        lay.addWidget(close)
+        lang = {"fr": "Français", "en": "Anglais"}.get(checker.lang[:2], checker.lang)
+        self.setWindowTitle(f"Orthographe — {lang}")
+
+    def start(self) -> bool:
+        """Cherche la première faute ; False si le document n'en contient aucune."""
+        return self._next()
+
+    def _next(self) -> bool:
+        while self.index < len(self.targets):
+            scene, item = self.targets[self.index]
+            if item.scene() is scene:
+                for start, end, word in self.checker.errors(item.text):
+                    if start >= self.offset:
+                        self._show(scene, item, start, end, word)
+                        return True
+            self.index += 1
+            self.offset = 0
+        self.current = None
+        return False
+
+    def _show(self, scene, item, start, end, word) -> None:
+        self.current = (scene, item, start, end, word)
+        esc = lambda t: t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")  # noqa: E731
+        text = item.text
+        a, b = max(0, start - 60), min(len(text), end + 60)
+        self.context.setText(("…" if a else "") + esc(text[a:start]) + "<b><u>" + esc(word) + "</u></b>"
+                             + esc(text[end:b]) + ("…" if b < len(text) else ""))
+        self.where.setText(f"Page « {scene.page_name} »")
+        self.suggestions.clear()
+        sugg = self.checker.suggest(word)
+        self.suggestions.addItems(sugg)
+        self.replacement.setText(sugg[0] if sugg else word)
+        if sugg:
+            self.suggestions.setCurrentRow(0)
+        self.win.show_page(scene)
+        scene.select_items([item])
+        self.win.view.ensureVisible(item.sceneBoundingRect(), 40, 40)
+
+    def _advance(self) -> None:
+        if not self._next():
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(self, "Orthographe", "La vérification orthographique est terminée.")
+            self.accept()
+
+    def _ignore(self) -> None:
+        if self.current:
+            self.offset = self.current[3]
+        self._advance()
+
+    def _ignore_all(self) -> None:
+        if self.current:
+            self.checker.ignore_all(self.current[4])
+        self._advance()
+
+    def _add(self) -> None:
+        if self.current:
+            self.checker.add_to_dictionary(self.current[4])
+        self._advance()
+
+    def _replace_in(self, scene, item, start, end, new) -> None:
+        text = item.text[:start] + new + item.text[end:]
+        scene.modify([item], lambda _it, st: st.update(text=text), "Orthographe")
+        self.changes += 1
+
+    def _change(self) -> None:
+        if not self.current:
+            return self._advance()
+        scene, item, start, end, _word = self.current
+        new = security.clean_line(self.replacement.text(), 200)
+        self._replace_in(scene, item, start, end, new)
+        self.offset = start + len(new)
+        self._advance()
+
+    def _change_all(self) -> None:
+        if not self.current:
+            return self._advance()
+        word = self.current[4]
+        new = security.clean_line(self.replacement.text(), 200)
+        pattern = self._re.compile(r"(?<![\w’'-])" + self._re.escape(word) + r"(?![\w’'-])")
+        for scene, item in self.targets[self.index:]:
+            if item.scene() is scene and pattern.search(item.text):
+                text = pattern.sub(new, item.text)
+                scene.modify([item], lambda _it, st, t=text: st.update(text=t), "Orthographe")
+                self.changes += 1
+        self.checker.ignore_all(word)
+        self._advance()

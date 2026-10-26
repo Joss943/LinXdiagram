@@ -30,7 +30,7 @@ import xml.etree.ElementTree as ET
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPainterPath
 
-from . import APP_NAME, __version__, fileformat, security, stencils, swimlanes
+from . import APP_NAME, __version__, fields, fileformat, security, stencils, swimlanes
 from .units import PX_PER_INCH
 
 VNS = "http://schemas.microsoft.com/office/visio/2012/main"
@@ -595,7 +595,7 @@ class _Importer:
         page_rels = self.pkg.rels(pages_part)
         pages = []
         id_to_name: dict[str, str] = {}
-        backpage_ids: list[str] = []
+        backrefs: list[tuple[dict, str]] = []
         for page in pages_xml.findall(_v("Page")):
             sheet_elem = page.find(_v("PageSheet"))
             ps = _Sheet(sheet_elem) if sheet_elem is not None else None
@@ -612,10 +612,16 @@ class _Importer:
                     self.layer_names.append(security.clean_line(cells.get("Name") or cells.get("NameUniv") or
                                                                 f"Calque {len(self.layer_names) + 1}", 64))
             page_dict = self._load_page(part, name, pw, ph)
-            # Pages d'arrière-plan : attribut Background et référence BackPage par identifiant.
-            page_dict["kind"] = "background" if page.get("Background") == "1" else "foreground"
-            id_to_name.setdefault(page.get("ID", ""), name)
-            backpage_ids.append(page.get("BackPage", ""))
+            if ps is not None:
+                for key, cells in ps.named_rows("User"):
+                    if key == "LinXGuides":
+                        raw = [g.split(":") for g in (cells.get("Value") or "").split(";") if ":" in g]
+                        page_dict["guides"] = fileformat.clean_guides(
+                            [{"o": o, "pos": (_num(v, None) or 0.0) * PX_PER_INCH} for o, v in raw[:200]])
+            id_to_name[page.get("ID", "")] = page_dict["name"]
+            page_dict["is_background"] = page.get("Background") in ("1", "true")
+            if page.get("BackPage"):
+                backrefs.append((page_dict, page.get("BackPage")))
             if ps is not None:
                 seen = set()
                 for _key, cells in ps.named_rows("Layer"):
@@ -630,8 +636,8 @@ class _Importer:
                 break
         if not pages:
             raise VsdxError("Aucune page dans ce document Visio.")
-        for page_dict, back_id in zip(pages, backpage_ids):
-            page_dict["backpage"] = id_to_name.get(back_id, "") if back_id else ""
+        for page_dict, back_id in backrefs:
+            page_dict["backpage"] = id_to_name.get(back_id, "")
         return {"format": fileformat.FORMAT, "version": fileformat.VERSION,
                 "settings": {"route": "orthogonal"}, "properties": {}, "pages": pages}
 
@@ -1357,7 +1363,7 @@ def _page_xml(scene, images: list[tuple[str, bytes]], fonts: dict) -> tuple[byte
                     _cell(row, "DirX", 0.0)
                     _cell(row, "DirY", 0.0)
                     _cell(row, "Type", 0)
-            _data_sections(el, st["data"], st["link"], st["type"], bool(sdef.cff),
+            _data_sections(el, st["data"], st["link"], st["type"], bool(sdef.container),
                            st.get("data_graphic"))
             outline, detail = it.export_paths()
             ix = 0
@@ -1386,7 +1392,7 @@ def _page_xml(scene, images: list[tuple[str, bytes]], fonts: dict) -> tuple[byte
                 rel = ET.SubElement(fd, _v("Rel"))
                 rel.set(f"{{{RNS}}}id", rid)
             if st["text"]:
-                _el(el, "Text").text = _xml_text(it.display_text())
+                _el(el, "Text").text = _xml_text(fields.resolve(st["text"], scene))
         elif isinstance(it, ConnectorItem):
             st = it.state()
             p1, p2 = it.end_points()
@@ -1453,7 +1459,7 @@ def _page_xml(scene, images: list[tuple[str, bytes]], fonts: dict) -> tuple[byte
                 _cell(row, "X", x / PX_PER_INCH - bx)
                 _cell(row, "Y", (ph - y / PX_PER_INCH) - by)
             if st["text"]:
-                _el(el, "Text").text = _xml_text(it.display_text())
+                _el(el, "Text").text = _xml_text(fields.resolve(st["text"], scene))
             for which, part, from_part in (("src", "BeginX", 9), ("dst", "EndX", 12)):
                 if glue[which] is not None:
                     connects.append((sid, part, from_part, glue[which]))
@@ -1549,14 +1555,15 @@ def export_vsdx(document, path: str) -> None:
 
     pages_el = ET.Element(_v("Pages"))
     page_list_rels = []
+    page_ids = {scene.page_name: i for i, scene in enumerate(document.pages)}
     for i, scene in enumerate(document.pages):
         name = _xml_text(scene.page_name)
         p = _el(pages_el, "Page", ID=str(i), NameU=name, Name=name)
-        if scene.page_kind == "background":
+        if scene.is_background:
             p.set("Background", "1")
-        bg = scene.background_scene()
-        if bg is not None:
-            p.set("BackPage", str(document.pages.index(bg)))
+        back = scene.backpage_scene()
+        if back is not None:
+            p.set("BackPage", str(page_ids[back.page_name]))
         sheet = _el(p, "PageSheet", LineStyle="0", FillStyle="0", TextStyle="0")
         _cell(sheet, "PageWidth", scene.page_w / PX_PER_INCH)
         _cell(sheet, "PageHeight", scene.page_h / PX_PER_INCH)
@@ -1579,6 +1586,13 @@ def export_vsdx(document, path: str) -> None:
                 _cell(row, "Active", False)
                 _cell(row, "Snap", True)
                 _cell(row, "Glue", True)
+        if getattr(scene, "ruler_guides", None):
+            # Repères de LinXdiagram (en pouces, origine en haut à gauche) : relus par LinXdiagram.
+            value = ";".join(f"{g['o']}:{g['pos'] / PX_PER_INCH:.4f}" for g in scene.ruler_guides)
+            sec = _el(sheet, "Section", N="User")
+            row = _el(sec, "Row", N="LinXGuides")
+            _cell(row, "Value", value, "STR", _str_formula(value))
+            _cell(row, "Prompt", "")
         rel = ET.SubElement(p, _v("Rel"))
         rel.set(f"{{{RNS}}}id", f"rId{i + 1}")
         page_list_rels.append((f"rId{i + 1}", REL_PAGE, f"page{i + 1}.xml"))

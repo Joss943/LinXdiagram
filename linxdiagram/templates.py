@@ -119,11 +119,11 @@ _CATALOG = (
      "Nœuds et artefacts de déploiement.", "deployment serveur nœud"),
     ("uml_state", "Diagramme d’états UML", "Logiciel et données", stencils.UML, "orthogonal", False,
      "États, transitions et événements UML.", "état machine transition"),
-    ("erd_crow", "Entité-association (Crow’s Foot)", "Logiciel et données", stencils.UML, "straight", False,
+    ("erd_crow", "Entité-association (Crow’s Foot)", "Logiciel et données", stencils.DB, "straight", False,
      "Entités et cardinalités Crow’s Foot.", "erd crow pied corbeau base données"),
-    ("erd_chen", "Entité-association (Chen)", "Logiciel et données", stencils.UML, "straight", False,
+    ("erd_chen", "Entité-association (Chen)", "Logiciel et données", stencils.DB, "straight", False,
      "Entités, attributs et relations Chen.", "erd chen entité relation"),
-    ("database_model", "Modèle de base de données", "Logiciel et données", stencils.UML, "straight", True,
+    ("database_model", "Modèle de base de données", "Logiciel et données", stencils.DB, "straight", True,
      "Formes de tables, champs et relations de données.", "base données schéma"),
     ("website", "Site web", "Logiciel et données", stencils.BASIC, "orthogonal", True,
      "Formes pour architecture et pages web.", "site internet page web"),
@@ -134,7 +134,7 @@ _CATALOG = (
     ("app_architecture", "Architecture d’application", "Logiciel et données", stencils.UML, "orthogonal", True,
      "Composants et dépendances d’application.", "logiciel architecture application"),
 
-    ("timeline", "Chronologie", "Calendrier", stencils.BASIC, "straight", True,
+    ("timeline", "Chronologie", "Calendrier", stencils.TIMELINE, "straight", True,
      "Repères et éléments de chronologie.", "timeline dates jalons"),
     ("calendar", "Calendrier", "Calendrier", stencils.BASIC, "straight", False,
      "Page vierge pour organiser un calendrier.", "mois semaine dates"),
@@ -177,7 +177,7 @@ _CATALOG = (
      "Formes génériques pour cartographier un flux SharePoint.", "sharepoint workflow"),
     ("business_process", "Processus métier", "Entreprise", stencils.FLOW, "orthogonal", True,
      "Activités et décisions de processus métier.", "bpm entreprise activité"),
-    ("block_diagram", "Diagramme de blocs", "Général", stencils.BASIC, "orthogonal", False,
+    ("block_diagram", "Diagramme de blocs", "Général", stencils.BLOCK, "orthogonal", False,
      "Formes de blocs pour représenter des composants et relations.", "bloc composant système"),
     ("relationship_diagram", "Diagramme de relations", "Entreprise", stencils.BASIC, "straight", False,
      "Formes pour présenter les relations entre éléments.", "relation entité"),
@@ -210,7 +210,8 @@ def _shape(sid: str, type_id: str, x_mm: float, y_mm: float, text: str, z: int) 
     style, text_style = fileformat.default_shape_styles(type_id, "office")
     shape = stencils.get(type_id)
     return {"id": sid, "type": type_id, "x": mm_to_px(x_mm), "y": mm_to_px(y_mm),
-            "w": mm_to_px(shape.size_mm[0] + 10), "h": mm_to_px(shape.size_mm[1] + 2),
+            "w": mm_to_px(shape.size_mm[0] + (0 if shape.label_outside else 10)),
+            "h": mm_to_px(shape.size_mm[1] + (0 if shape.label_outside else 2)),
             "rotation": 0.0, "flip_h": False, "flip_v": False, "z": float(z), "text": text,
             "style": style, "text_style": text_style, "data": {}, "link": "", "group": ""}
 
