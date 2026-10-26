@@ -375,6 +375,15 @@ def _text_lines(c, x0=12):
         c.line(x0, y, 28, y, INK)
 
 
+@_reg("text_block")
+def _text_block(c):
+    c.rect(4, 7, 24, 18, fill=None, stroke=INK2)
+    c.rect(8, 11, 16, 10, fill=PAPER, stroke=GREEN)
+    c.text(8, 11, 16, 10, "A", 9, bold=True, color=INK)
+    for x, y in ((8, 11), (24, 11), (24, 21), (8, 21)):
+        c.rect(x - 1.5, y - 1.5, 3, 3, fill=PAPER, stroke=GREEN)
+
+
 @_reg("indent_more")
 def _indent_more(c):
     _text_lines(c)

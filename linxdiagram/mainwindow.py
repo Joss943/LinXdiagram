@@ -26,7 +26,8 @@ from .canvas import CanvasArea
 from .commands import DocSettingsCommand, PageCommand, ReorderPagesCommand
 from .dialogs import (DataGraphicDialog, DataImportDialog, DataLinkDialog, FindReplaceDialog,
                       ImageExportDialog, LayersDialog, OptionsDialog, PageSetupDialog, PasswordDialog, PropertiesDialog,
-                      ReorderPagesDialog, ShapeSheetDialog, ShortcutsDialog, ZoomDialog, FieldDialog, SpellDialog)
+                      ReorderPagesDialog, RulerGridDialog, ShapeSheetDialog, SnapGlueDialog, ShortcutsDialog,
+                      ZoomDialog, FieldDialog, SpellDialog)
 from .document import Document
 from .items import ConnectorItem, ShapeItem, decode_image
 from .panes import (CommentsPane, DrawingExplorerPane, FormatPane, IssuesPane, PanZoomPane,
@@ -273,7 +274,12 @@ class MainWindow(QMainWindow):
                 ("rectangle", "Rectangle", "rect_tool", "Ctrl+8", "Dessiner un rectangle."),
                 ("ellipse", "Ellipse", "ellipse_tool", "Ctrl+9", "Dessiner une ellipse."),
                 ("freeform", "Forme libre", "freeform", "Ctrl+5", "Dessiner une forme fermée à main levée."),
-                ("arc", "Arc", "arc", None, "Tracer un arc entre deux points.")):
+                ("arc", "Arc", "arc", None, "Tracer un arc entre deux points."),
+                ("port", "Point de connexion", "ports", "Ctrl+Shift+1",
+                 "Ctrl + clic sur une forme : ajouter un point. Clic : le sélectionner, puis le "
+                 "glisser ou le supprimer (Suppr)."),
+                ("textblock", "Bloc de texte", "text_block", "Ctrl+Shift+4",
+                 "Déplacer ou redimensionner la zone de texte d'une forme.")):
             act = A(f"tool_{key}", text, ic, sc, None, checkable=True, tip=tip,
                     label="Pointeur" if key == "select" else None)
             act.triggered.connect(lambda _=False, k=key: self.doc.set_tool(k))
@@ -436,6 +442,9 @@ class MainWindow(QMainWindow):
         A("presentation", "Plein écran", "presentation", "F5", self.start_presentation,
           tip="Affiche les pages en plein écran (flèches pour naviguer, Échap pour quitter).")
         A("rulers", "Règle", None, None, self.toggle_rulers, checkable=True)
+        A("page_breaks", "Sauts de page", None, None,
+          lambda on: self.doc.apply_settings({"page_breaks": on}), checkable=True,
+          tip="Montre où la page sera coupée à l'impression en taille réelle.")
         A("ruler_guides", "Repères", None, None, self.toggle_ruler_guides, checkable=True,
           tip="Affiche les repères tirés depuis les règles et l'accrochage à ces repères.")
         A("arrange_all", "Réorganiser tout", "new_window", None, self.arrange_windows,
@@ -701,6 +710,7 @@ class MainWindow(QMainWindow):
                                a["tool_freeform"], a["tool_arc"])
         g.column(a["tool_connector"], a["tool_text"],
                  R(None, SMALL, text="Outils de dessin", icon_name="drawing_tools", menu=draw_menu))
+        g.column(R(a["tool_port"], ICON), R(a["tool_textblock"], ICON))
         home.addWidget(g)
 
         g = RibbonGroup("Styles de forme", lambda: self.show_pane("format"), "Format de la forme")
@@ -969,10 +979,11 @@ class MainWindow(QMainWindow):
         g = RibbonGroup("Explorateur")
         g.large(a["pane_drawing"])
         view.addWidget(g)
-        g = RibbonGroup("Afficher")
-        g.column(self._check(a["rulers"]), self._check(a["grid"]), self._check(a["ruler_guides"]))
+        g = RibbonGroup("Afficher", self.ruler_grid_dialog, "Règle et grille…")
+        g.column(self._check(a["rulers"]), self._check(a["page_breaks"]), self._check(a["grid"]))
+        g.column(self._check(a["ruler_guides"]))
         view.addWidget(g)
-        g = RibbonGroup("Aide visuelle")
+        g = RibbonGroup("Aide visuelle", self.snap_glue_dialog, "Accrocher et coller…")
         g.column(self._check(a["guides"]), self._check(a["autoconnect"]), self._check(a["ports"]))
         g.column(self._check(a["snap"]), self._check(a["line_jumps"], "Sauts de ligne"))
         view.addWidget(g)
@@ -1264,6 +1275,7 @@ class MainWindow(QMainWindow):
         from .scene import DiagramScene
         DiagramScene.show_ruler_guides = guides
         self.a["line_jumps"].setChecked(s.get("line_jumps", True))
+        self.a["page_breaks"].setChecked(bool(s.get("page_breaks")))
 
     def _pages_changed(self) -> None:
         doc = self.doc
@@ -1645,6 +1657,8 @@ class MainWindow(QMainWindow):
             return
         if sc.selected_guide is not None and not sc.selected_all():
             sc.remove_guide(sc.selected_guide)
+            return
+        if self.doc.tool == "port" and sc.remove_selected_port():
             return
         locked = [s for s in sc.selected_shapes() if s.locked]
         sc.delete_selection()
@@ -2786,6 +2800,28 @@ class MainWindow(QMainWindow):
         if self.doc is not None:
             self.doc.apply_settings({key: on})
 
+    def _change_doc_settings(self, values: dict, text: str) -> None:
+        before = {k: self.doc.settings.get(k) for k in values}
+        if before != values:
+            self.doc.undo_stack.push(DocSettingsCommand(self.doc, before, dict(values), text))
+            self._sync_view_checks()
+
+    def _sync_view_checks(self) -> None:
+        for key in ("snap", "guides"):
+            act = self.a[key]
+            if act.isChecked() != bool(self.doc.settings.get(key)):
+                act.setChecked(bool(self.doc.settings.get(key)))
+
+    def ruler_grid_dialog(self) -> None:
+        dlg = RulerGridDialog(self, self.doc.settings)
+        if dlg.exec() == RulerGridDialog.DialogCode.Accepted:
+            self._change_doc_settings(dlg.values(), "Règle et grille")
+
+    def snap_glue_dialog(self) -> None:
+        dlg = SnapGlueDialog(self, self.doc.settings)
+        if dlg.exec() == SnapGlueDialog.DialogCode.Accepted:
+            self._change_doc_settings(dlg.values(), "Accrocher et coller")
+
     def toggle_ruler_guides(self, on: bool) -> None:
         self.settings.setValue("view/ruler_guides", on)
         from .scene import DiagramScene
@@ -3080,6 +3116,7 @@ class MainWindow(QMainWindow):
     # ================================================================== backstage
     def show_backstage(self, page: str = "home") -> None:
         self.backstage.set_recent(self.ctx.recent_files())
+        self.backstage.sync_print_options()
         self.backstage.select(page)
         self.stack.setCurrentIndex(1)
         self.statusBar().hide()

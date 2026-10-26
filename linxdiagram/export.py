@@ -13,7 +13,7 @@ from PyQt6.QtSvg import QSvgGenerator
 
 from . import APP_NAME, __version__
 from .security import SecurityError, atomic_target, atomic_write
-from .units import PX_PER_MM
+from .units import PAGE_SIZES, PX_PER_MM
 
 MAX_IMAGE_SIDE = 16000
 MAX_IMAGE_PIXELS = 160_000_000
@@ -254,8 +254,29 @@ def export_pdf(pages, path: str, title: str = "") -> None:
             painter.end()
 
 
-def print_pages(printer, pages) -> None:
-    """Imprime chaque page à l'échelle de la feuille (orientation automatique)."""
+def paper_px(scene, paper: str) -> tuple[float, float]:
+    """Taille de la feuille d'imprimante (px), dans l'orientation de la page de dessin."""
+    w, h = PAGE_SIZES.get(paper, PAGE_SIZES["A4"])
+    w, h = w * PX_PER_MM, h * PX_PER_MM
+    if (scene.page_w > scene.page_h) != (w > h):
+        w, h = h, w
+    return w, h
+
+
+def page_tiles(scene, paper: str) -> list[QRectF]:
+    """Découpage de la page de dessin en feuilles à 100 % (sauts de page de Visio)."""
+    pw, ph = paper_px(scene, paper)
+    cols = max(1, math.ceil(scene.page_w / pw - 1e-6))
+    rows = max(1, math.ceil(scene.page_h / ph - 1e-6))
+    return [QRectF(c * pw, r * ph, pw, ph) for r in range(rows) for c in range(cols)]
+
+
+def print_pages(printer, pages, tile: bool = False, paper: str = "A4") -> None:
+    """Imprime chaque page à l'échelle de la feuille (orientation automatique), ou, en mode
+    mosaïque, à 100 % sur autant de feuilles que nécessaire, comme Visio."""
+    if tile:
+        _print_tiled(printer, pages, paper)
+        return
     painter = None
     for i, scene in enumerate(pages):
         landscape = scene.page_w > scene.page_h
@@ -271,5 +292,32 @@ def print_pages(printer, pages) -> None:
         target.moveTo(0, 0)
         with exporting(scene):
             _render(scene, painter, target, scene.page_rect())
+    if painter is not None:
+        painter.end()
+
+
+def _print_tiled(printer, pages, paper: str) -> None:
+    w, h = PAGE_SIZES.get(paper, PAGE_SIZES["A4"])
+    printer.setPageSize(QPageSize(QSizeF(w, h), QPageSize.Unit.Millimeter, paper,
+                                  QPageSize.SizeMatchPolicy.FuzzyMatch))
+    printer.setFullPage(True)
+    painter = None
+    first = True
+    for scene in pages:
+        landscape = scene.page_w > scene.page_h
+        printer.setPageOrientation(QPageLayout.Orientation.Landscape if landscape
+                                   else QPageLayout.Orientation.Portrait)
+        for src in page_tiles(scene, paper):
+            if first:
+                painter = QPainter(printer)
+                if not painter.isActive():
+                    return
+                first = False
+            else:
+                printer.newPage()
+            k = printer.resolution() / 96.0
+            target = QRectF(0, 0, src.width() * k, src.height() * k)
+            with exporting(scene):
+                _render(scene, painter, target, src)
     if painter is not None:
         painter.end()

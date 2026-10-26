@@ -184,6 +184,127 @@ class VisioEditingTest(unittest.TestCase):
         dlg.move(-1)
         self.assertEqual(dlg.order(), [pages[1], pages[0]])
 
+    def test_connection_point_tool(self):
+        a = self.sc.add_shape("basic.rectangle", QPointF(200, 200))
+        b = self.sc.add_shape("basic.rectangle", QPointF(420, 200))
+        n = a.port_count()
+        self.w.doc.set_tool("port")
+        target = QPointF(a.pos().x() + a.w / 4, a.pos().y() - a.h / 4)  # loin des points existants
+        QTest.mouseClick(self.vp, L, CTRL, self.P(target.x(), target.y()))
+        self.assertEqual(a.port_count(), n + 1)
+        p, _ = a.port_scene(n)
+        self.assertLess((p - target).manhattanLength(), 1.0)
+        # un connecteur collé au nouveau point, puis suppression du point
+        st = self.sc.new_connector_state({"shape": a.id, "port": n, "x": 0, "y": 0},
+                                         {"shape": b.id, "port": -1, "x": 0, "y": 0})
+        self.sc.add_states([st], "c")
+        conn = self.sc.item_by_id(st["id"])
+        self.sc.select_items([a])
+        self.sc.selected_port = (a.id, n)
+        self.w.delete()
+        self.assertEqual(a.port_count(), n)
+        self.assertEqual(conn.src["port"], -1)
+        self.assertEqual(conn.src["shape"], a.id)
+        self.w.doc.undo_stack.undo()
+        self.assertEqual(a.port_count(), n + 1)
+        self.assertEqual(conn.src["port"], n)
+
+    def test_connection_points_survive_save_and_vsdx(self):
+        import os
+        import tempfile
+        from linxdiagram import fileformat, vsdx
+        a = self.sc.add_shape("basic.rectangle", QPointF(200, 200))
+        self.sc.add_port(a, QPointF(a.pos().x(), a.pos().y()))
+        ports = [list(p) for p in a.ports]
+        data, _w = fileformat.validate_document(fileformat.parse_json(fileformat.dump_bytes(self.w.doc.to_dict())))
+        self.assertEqual(len(data["pages"][0]["shapes"][0]["ports"]), len(ports))
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "ports.vsdx")
+            vsdx.export_vsdx(self.w.doc, path)
+            imported, _w = vsdx.import_vsdx(path)
+        got = imported["pages"][0]["shapes"][0]["ports"]
+        self.assertEqual(len(got), len(ports))
+        self.assertAlmostEqual(got[-1][0], 0.5, places=3)
+
+    def test_text_block_tool_moves_text(self):
+        a = self.sc.add_shape("basic.rectangle", QPointF(200, 200))
+        self.sc.select_items([a])
+        self.w.doc.set_tool("textblock")
+        r0 = a.text_rect()
+        start = a.mapToScene(r0.center())
+        QTest.mousePress(self.vp, L, Qt.KeyboardModifier.NoModifier, self.P(start.x(), start.y()))
+        for i in range(1, 6):
+            QTest.mouseMove(self.vp, self.P(start.x() + 8 * i, start.y() + 4 * i))
+            self.app.processEvents()
+        QTest.mouseRelease(self.vp, L, Qt.KeyboardModifier.NoModifier, self.P(start.x() + 40, start.y() + 20))
+        r1 = a.text_rect()
+        self.assertAlmostEqual(r1.center().x() - r0.center().x(), 40, delta=2)
+        self.assertAlmostEqual(r1.width(), r0.width(), delta=0.5)
+        self.assertEqual(self.w.doc.undo_stack.undoText(), "Modifier le bloc de texte")
+        self.w.doc.undo_stack.undo()
+        self.assertAlmostEqual(a.text_rect().center().x(), r0.center().x(), delta=0.5)
+
+    def test_grid_spacing_and_snap_glue_settings(self):
+        from linxdiagram.dialogs import RulerGridDialog, SnapGlueDialog
+        dlg = RulerGridDialog(self.w, self.w.doc.settings)
+        dlg.preset.setCurrentIndex(2)  # Grossier, 10 mm
+        self.w._change_doc_settings(dlg.values(), "Règle et grille")
+        self.assertAlmostEqual(self.sc.snap_point(QPointF(31, 31)).x() % self.sc.grid_px, 0, places=3)
+        self.assertAlmostEqual(self.sc.grid_px, 10 * 96 / 25.4, places=3)
+        dlg = SnapGlueDialog(self.w, self.w.doc.settings)
+        dlg.boxes["glue"].setChecked(False)
+        dlg.strength.setValue(15)
+        self.w._change_doc_settings(dlg.values(), "Accrocher et coller")
+        self.assertFalse(self.w.doc.settings["glue"])
+        self.assertEqual(self.sc.snap_tol_px, 15)
+        a = self.sc.add_shape("basic.rectangle", QPointF(200, 200))
+        self.sc._begin_new_connector(QPointF(50, 50))
+        self.sc._update_conn_drag(a.pos())
+        self.assertIsNone(self.sc.glue_target)  # collage désactivé
+        self.sc._finish_conn_drag(a.pos())
+        self.w.doc.undo_stack.undo()
+        self.w.doc.undo_stack.undo()
+
+    def test_page_breaks_and_tiled_printing(self):
+        from PyQt6.QtGui import QPageLayout
+        from linxdiagram import export
+        from linxdiagram.units import PAGE_SIZES, PX_PER_MM
+        a4w, a4h = (v * PX_PER_MM for v in PAGE_SIZES["A4"])
+        self.assertEqual(len(export.page_tiles(self.sc, "A4")), 1)  # page A4 : une seule feuille
+        before = self.sc.page_props()
+        self.sc.set_page_props(dict(before, width=a4w * 1.5, height=a4h * 1.2))
+        tiles = export.page_tiles(self.sc, "A4")
+        self.assertEqual(len(tiles), 4)
+        self.w.a["page_breaks"].setChecked(True)
+        self.assertTrue(self.w.doc.settings["page_breaks"])
+        self.sc.add_shape("basic.rectangle", QPointF(a4w * 1.2, a4h * 1.1))
+
+        import os
+        import re
+        import tempfile
+        from PyQt6.QtPrintSupport import QPrinter
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "mosaique.pdf")
+            printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+            printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+            printer.setOutputFileName(path)
+            export.print_pages(printer, [self.sc], tile=True, paper="A4")
+            with open(path, "rb") as f:
+                pdf = f.read()
+        self.assertEqual(len(re.findall(rb"/Type\s*/Page[^s]", pdf)), 4)
+        self.assertIsNotNone(QPageLayout)
+
+    def test_print_page_options(self):
+        self.w.show_backstage("home")
+        self.w.backstage.select("print")
+        self.app.processEvents()
+        bs = self.w.backstage
+        bs.scale_mode.setCurrentIndex(1)
+        bs.paper.setCurrentIndex(bs.paper.findData("A3"))
+        self.assertTrue(self.w.doc.settings["print_tile"])
+        self.assertEqual(self.w.doc.settings["paper"], "A3")
+        self.w.hide_backstage()
+
 
 if __name__ == "__main__":
     unittest.main()

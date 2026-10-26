@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import QApplication, QGraphicsScene
 from . import fields, fileformat, layout, quickstyles, shapeops, stencils, swimlanes
 from .commands import AddItemsCommand, RemoveItemsCommand, StateCommand, _shapes_first
 from .items import ACCENT, GLUE, ConnectorItem, ShapeItem, TextLabel, make_item
-from .units import GRID_PX, connector_style, connector_text_style, mm_to_px
+from .units import GRID_MM, connector_style, connector_text_style, mm_to_px
 
 PORT_TOL_PX = 9.0
 GUIDE_TOL_PX = 7.0
@@ -115,6 +115,9 @@ class DiagramScene(QGraphicsScene):
         self._conn_drag: dict | None = None
         self._draw: dict | None = None
         self._jump_pending = False
+        self.selected_port: tuple[str, int] | None = None  # outil Point de connexion
+        self._port_drag: dict | None = None
+        self._tb_drag: dict | None = None  # outil Bloc de texte
         self._carry: dict[str, QPointF] = {}
         self._carry_anchor: tuple[str, QPointF] | None = None
         self._sel_order: list = []  # ordre de sélection : la première forme est la « principale »
@@ -131,6 +134,20 @@ class DiagramScene(QGraphicsScene):
     @property
     def snap_enabled(self) -> bool:
         return self.doc.settings["snap"]
+
+    @property
+    def grid_px(self) -> float:
+        """Espacement de la grille (Affichage > Règle et grille)."""
+        return mm_to_px(self.doc.settings.get("grid_mm", GRID_MM))
+
+    @property
+    def snap_tol_px(self) -> float:
+        """Force d'accrochage, en pixels d'écran (Accrocher et coller)."""
+        return float(self.doc.settings.get("snap_tol", GUIDE_TOL_PX))
+
+    @property
+    def snap_to_grid(self) -> bool:
+        return self.snap_enabled and self.doc.settings.get("snap_grid", True)
 
     def item_by_id(self, item_id: str):
         return self._items.get(item_id)
@@ -395,7 +412,7 @@ class DiagramScene(QGraphicsScene):
         if self.doc.settings["grid"]:
             area = rect.intersected(page)
             if not area.isEmpty():
-                step = GRID_PX
+                step = self.grid_px
                 while step * s < 7:
                     step *= 2
                 minor, major = [], []
@@ -420,6 +437,49 @@ class DiagramScene(QGraphicsScene):
         painter.setPen(QPen(QColor("#b9bec6"), 0))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(page)
+        if self.doc.settings.get("page_breaks"):
+            self._paint_page_breaks(painter, page)
+
+    def _paint_page_breaks(self, painter: QPainter, page: QRectF) -> None:
+        """Affichage > Sauts de page : limites des feuilles imprimées à 100 %."""
+        from .export import page_tiles
+        tiles = page_tiles(self, self.doc.settings.get("paper", "A4"))
+        if len(tiles) <= 1:
+            return
+        pen = QPen(QColor("#5b6b7f"), 1.2 / self.view_scale, Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        xs = sorted({t.left() for t in tiles if t.left() > 0.5})
+        ys = sorted({t.top() for t in tiles if t.top() > 0.5})
+        for x in xs:
+            if x < page.right():
+                painter.drawLine(QLineF(x, page.top(), x, page.bottom()))
+        for y in ys:
+            if y < page.bottom():
+                painter.drawLine(QLineF(page.left(), y, page.right(), y))
+
+    def _paint_tool_overlay(self, painter: QPainter, tool: str, hover) -> None:
+        s = self.view_scale
+        shapes = [x for x in (self.single_selected, hover) if isinstance(x, ShapeItem)]
+        if tool == "port":
+            k = 4 / s
+            for shape in dict.fromkeys(shapes):
+                for i in range(shape.port_count()):
+                    p, _ = shape.port_scene(i)
+                    sel = self.selected_port == (shape.id, i)
+                    painter.setPen(QPen(QColor("#d13438") if sel else ACCENT, (2.2 if sel else 1.4) / s))
+                    painter.drawLine(QPointF(p.x() - k, p.y() - k), QPointF(p.x() + k, p.y() + k))
+                    painter.drawLine(QPointF(p.x() - k, p.y() + k), QPointF(p.x() + k, p.y() - k))
+            return
+        single = self.single_selected
+        if isinstance(single, ShapeItem):
+            poly = single.mapToScene(single.text_rect())
+            painter.setPen(QPen(QColor("#2b8a3e"), 1.2 / s, Qt.PenStyle.DashLine))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPolygon(poly)
+            painter.setPen(QPen(QColor("#2b8a3e"), 1 / s))
+            painter.setBrush(QColor("#ffffff"))
+            for i in range(4):
+                painter.drawRect(QRectF(poly[i].x() - 3.5 / s, poly[i].y() - 3.5 / s, 7 / s, 7 / s))
 
     def drawForeground(self, painter: QPainter, rect: QRectF) -> None:  # noqa: N802
         if self.exporting:
@@ -480,6 +540,8 @@ class DiagramScene(QGraphicsScene):
             else:
                 p, _ = shape.port_scene(port)
                 painter.drawEllipse(p, 6 / s, 6 / s)
+        if tool in ("port", "textblock"):
+            self._paint_tool_overlay(painter, tool, hover)
         if hover is not None and self._autoconnect_allowed(hover):
             for i, (pt, (dx, dy)) in enumerate(zip(self._autoconnect_points(hover), AC_DIRS)):
                 active = i == self.hover_arrow
@@ -610,9 +672,10 @@ class DiagramScene(QGraphicsScene):
         w = w if w is not None else mm_to_px(sdef.size_mm[0])
         h = h if h is not None else mm_to_px(sdef.size_mm[1])
         x, y = center.x(), center.y()
-        if snap and self.snap_enabled:
-            x = round((x - w / 2) / GRID_PX) * GRID_PX + w / 2
-            y = round((y - h / 2) / GRID_PX) * GRID_PX + h / 2
+        if snap and self.snap_to_grid:
+            g = self.grid_px
+            x = round((x - w / 2) / g) * g + w / 2
+            y = round((y - h / 2) / g) * g + h / 2
         return {"id": self._fresh_id(), "type": type_id, "x": x, "y": y, "w": w, "h": h,
                 "rotation": 0.0, "flip_h": False, "flip_v": False,
                 "z": self.min_z() if sdef.container else self.next_z(),
@@ -692,6 +755,14 @@ class DiagramScene(QGraphicsScene):
                                        "before": item.state(), "start": pos}
                     event.accept()
                     return
+        if tool == "port":
+            self._port_press(pos, event.modifiers())
+            event.accept()
+            return
+        if tool == "textblock":
+            self._textblock_press(pos)
+            event.accept()
+            return
         if tool in ("connector", "line"):
             self._begin_new_connector(pos, route="straight" if tool == "line" else None)
             event.accept()
@@ -775,6 +846,14 @@ class DiagramScene(QGraphicsScene):
             self._update_conn_drag(pos)
             event.accept()
             return
+        if self._port_drag is not None:
+            self._port_move(pos)
+            event.accept()
+            return
+        if self._tb_drag is not None:
+            self._textblock_move(pos)
+            event.accept()
+            return
         if self._draw is not None and self._draw["tool"] in ("freeform", "arc"):
             pts = self._draw["points"]
             if self._draw["tool"] == "arc":
@@ -837,6 +916,10 @@ class DiagramScene(QGraphicsScene):
             return
         if self._conn_drag is not None:
             self._finish_conn_drag(pos)
+            event.accept()
+            return
+        if self._port_drag is not None or self._tb_drag is not None:
+            self._finish_tool_drag()
             event.accept()
             return
         if self._draw is not None:
@@ -968,7 +1051,7 @@ class DiagramScene(QGraphicsScene):
 
     def cursor_for(self, pos: QPointF) -> Qt.CursorShape:
         tool = self.doc.tool
-        if self._conn_drag is not None or tool in ("connector", "line", "rectangle", "ellipse"):
+        if self._conn_drag is not None or tool in ("connector", "line", "rectangle", "ellipse", "port"):
             return Qt.CursorShape.CrossCursor
         if self.format_painter is not None:
             return Qt.CursorShape.PointingHandCursor
@@ -993,11 +1076,137 @@ class DiagramScene(QGraphicsScene):
             return Qt.CursorShape.SizeAllCursor
         return Qt.CursorShape.ArrowCursor
 
+    # ------------------------------------------------------------------ outil Point de connexion
+    def _tool_shape(self, pos: QPointF):
+        single = self.single_selected
+        if isinstance(single, ShapeItem) and single.contains(single.mapFromScene(pos)):
+            return single
+        shape = self.shape_at(pos)
+        return shape if shape is not None and not shape.sdef.cff else None
+
+    def _port_press(self, pos: QPointF, mods) -> None:
+        """Comme Visio : clic sur un point = le sélectionner (puis Suppr ou glisser),
+        Ctrl + clic sur la forme = ajouter un point."""
+        shape = self._tool_shape(pos)
+        if shape is None:
+            self.selected_port = None
+            self.clearSelection()
+            self.update()
+            return
+        if not shape.isSelected():
+            self.select_items([shape])
+        if shape.locked:
+            return
+        idx = shape.port_at(pos, PORT_TOL_PX / self.view_scale)
+        if mods & Qt.KeyboardModifier.ControlModifier and idx is None:
+            self.add_port(shape, pos)
+            self.selected_port = (shape.id, shape.port_count() - 1)
+        elif idx is not None:
+            self.selected_port = (shape.id, idx)
+            self._port_drag = {"shape": shape, "index": idx, "before": shape.state()}
+        else:
+            self.selected_port = None
+        self.update()
+
+    def _port_move(self, pos: QPointF) -> None:
+        d = self._port_drag
+        shape: ShapeItem = d["shape"]
+        ports = [list(p) for p in shape.ports]
+        ports[d["index"]] = list(shape.local_norm(self.snap_point(pos)))
+        shape.custom_ports = [tuple(p) for p in ports]
+        shape.notify_connectors()
+        self.update()
+
+    def _set_ports(self, shape: ShapeItem, ports: list, text: str) -> None:
+        def fn(_it, st):
+            st["ports"] = [list(p) for p in ports]
+        self.modify([shape], fn, text)
+
+    def add_port(self, shape: ShapeItem, scene_pos: QPointF) -> None:
+        nx, ny = shape.local_norm(scene_pos)
+        self._set_ports(shape, list(shape.ports) + [(nx, ny)], "Ajouter un point de connexion")
+
+    def remove_selected_port(self) -> bool:
+        if self.selected_port is None:
+            return False
+        sid, idx = self.selected_port
+        shape = self._items.get(sid)
+        self.selected_port = None
+        if not isinstance(shape, ShapeItem) or shape.locked or not 0 <= idx < shape.port_count():
+            return False
+        text = "Supprimer le point de connexion"
+        self.doc.undo_stack.beginMacro(text)
+        self._set_ports(shape, [p for i, p in enumerate(shape.ports) if i != idx], text)
+
+        def renumber(_it, st):
+            for end in (st["src"], st["dst"]):
+                if end["shape"] == sid and end["port"] == idx:
+                    end["port"] = -1  # le connecteur reste collé à la forme (collage dynamique)
+                elif end["shape"] == sid and end["port"] > idx:
+                    end["port"] -= 1
+        self.modify(self.connectors_of(sid), renumber, text)
+        self.doc.undo_stack.endMacro()
+        self.update()
+        return True
+
+    # ------------------------------------------------------------------ outil Bloc de texte
+    def _textblock_press(self, pos: QPointF) -> None:
+        shape = self._tool_shape(pos)
+        if shape is None:
+            self.clearSelection()
+            return
+        if not shape.isSelected():
+            self.select_items([shape])
+        if shape.locked:
+            return
+        r = shape.text_rect()
+        local = shape.mapFromScene(pos)
+        tol = 6 / self.view_scale
+        corners = [r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft()]
+        mode = next((i for i, c in enumerate(corners) if QLineF(c, local).length() <= tol), None)
+        if mode is None and r.contains(local):
+            mode = "move"
+        if mode is None:
+            return
+        self._tb_drag = {"shape": shape, "mode": mode, "start": local, "rect": QRectF(r),
+                         "before": shape.state()}
+
+    def _textblock_move(self, pos: QPointF) -> None:
+        d = self._tb_drag
+        shape: ShapeItem = d["shape"]
+        r = QRectF(d["rect"])
+        delta = shape.mapFromScene(pos) - d["start"]
+        if d["mode"] == "move":
+            r.translate(delta)
+        else:
+            getter = [r.topLeft, r.topRight, r.bottomRight, r.bottomLeft][d["mode"]]
+            setter = [r.setTopLeft, r.setTopRight, r.setBottomRight, r.setBottomLeft][d["mode"]]
+            setter(getter() + delta)
+            r = r.normalized()
+            r.setWidth(max(r.width(), 6.0))
+            r.setHeight(max(r.height(), 6.0))
+        w, h = shape.w, shape.h
+        shape.text_rect_override = [(r.left() + w / 2) / w, (r.top() + h / 2) / h, r.width() / w, r.height() / h]
+        shape.layout_label()
+        shape.update()
+        self.update()
+
+    def _finish_tool_drag(self) -> None:
+        d = self._port_drag or self._tb_drag
+        self._port_drag = self._tb_drag = None
+        shape: ShapeItem = d["shape"]
+        after = shape.state()
+        if after != d["before"]:
+            text = "Déplacer le point de connexion" if "index" in d else "Modifier le bloc de texte"
+            self.push_state({shape.id: d["before"]}, {shape.id: after}, text)
+        self.update()
+
     # ------------------------------------------------------------------ magnétisme
     def snap_point(self, p: QPointF) -> QPointF:
-        if not self.snap_enabled:
+        if not self.snap_to_grid:
             return p
-        return QPointF(round(p.x() / GRID_PX) * GRID_PX, round(p.y() / GRID_PX) * GRID_PX)
+        g = self.grid_px
+        return QPointF(round(p.x() / g) * g, round(p.y() / g) * g)
 
     def adjust_move(self, item, value: QPointF) -> QPointF:
         grabber = self._owner(self.mouseGrabberItem())
@@ -1024,7 +1233,7 @@ class DiagramScene(QGraphicsScene):
         adj_x = adj_y = None
         hit_x = hit_y = None
         if self.doc.settings["guides"]:
-            tol = GUIDE_TOL_PX / s
+            tol = self.snap_tol_px / s
             bx = (box.left(), box.center().x(), box.right())
             by = (box.top(), box.center().y(), box.bottom())
             for o in self.shapes():
@@ -1041,8 +1250,8 @@ class DiagramScene(QGraphicsScene):
                         d = vy - y
                         if abs(d) <= tol and (adj_y is None or abs(d) < abs(adj_y)):
                             adj_y, hit_y = d, (vy, ob)
-        if self.ruler_guides and self.show_ruler_guides:
-            tol = GUIDE_TOL_PX / s
+        if self.ruler_guides and self.show_ruler_guides and self.doc.settings.get("snap_ruler_guides", True):
+            tol = self.snap_tol_px / s
             for gd in self.ruler_guides:
                 refs = (box.left(), box.center().x(), box.right()) if gd["o"] == "v" else \
                     (box.top(), box.center().y(), box.bottom())
@@ -1054,14 +1263,15 @@ class DiagramScene(QGraphicsScene):
                         adj_x, hit_x = d, None
                     elif gd["o"] == "h" and (adj_y is None or abs(d) < abs(adj_y)):
                         adj_y, hit_y = d, None
-        if self.snap_enabled:
+        if self.snap_to_grid:
             square = abs(round(g.rotation() / 90.0) * 90.0 - g.rotation()) < 0.01
             ref_x = box.left() if square else box.center().x()
             ref_y = box.top() if square else box.center().y()
+            g = self.grid_px
             if adj_x is None:
-                adj_x = round(ref_x / GRID_PX) * GRID_PX - ref_x
+                adj_x = round(ref_x / g) * g - ref_x
             if adj_y is None:
-                adj_y = round(ref_y / GRID_PX) * GRID_PX - ref_y
+                adj_y = round(ref_y / g) * g - ref_y
         adj = QPointF(adj_x or 0.0, adj_y or 0.0)
         final = box.translated(adj)
         guides = []
@@ -1101,13 +1311,18 @@ class DiagramScene(QGraphicsScene):
         d = self._conn_drag
         conn: ConnectorItem = d["item"]
         exclude = d.get("start_shape") if d["mode"] == "new" else None
-        target = self.shape_at(pos, exclude=exclude)
+        settings = self.doc.settings
+        target = self.shape_at(pos, exclude=exclude) if settings.get("glue", True) else None
         if isinstance(target, ShapeItem) and (target is conn or target.sdef.cff):
             target = None
         end = {"shape": "", "port": -1, "x": pos.x(), "y": pos.y()}
         port = None
         if target is not None:
-            port = target.port_at(pos, PORT_TOL_PX * 1.5 / self.view_scale)
+            if settings.get("glue_ports", True):
+                port = target.port_at(pos, PORT_TOL_PX * 1.5 / self.view_scale)
+            if port is None and not settings.get("glue_shapes", True):
+                target = None  # collage dynamique à la forme désactivé
+        if target is not None:
             end.update(shape=target.id, port=port if port is not None else -1)
             self.glue_target = (target, port)
         else:

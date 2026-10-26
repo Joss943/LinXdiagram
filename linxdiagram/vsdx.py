@@ -927,6 +927,17 @@ class _Importer:
             left = (tpx - tlx) / W
             top = 1.0 - (tpy - tly + th) / H
             st["text_rect"] = [left, top, tw / W, th / H]
+        # Points de connexion propres à la forme (ajoutés avec l'outil Point de connexion).
+        conn_rows = sheet.named_rows("Connection")
+        if conn_rows and W > 0 and H > 0:
+            ports = []
+            for _key, cells in conn_rows[:fileformat.MAX_PORTS]:
+                x, y = _num(cells.get("X"), None), _num(cells.get("Y"), None)
+                if x is not None and y is not None:
+                    ports.append([round(x / W, 6), round(1.0 - y / H, 6)])
+            default = [list(p) for p in stencils.get(st["type"]).ports]
+            if ports and not _same_points(ports, default):
+                st["ports"] = ports
         page["shapes"].append(st)
 
     def _foreign_image(self, elem) -> str:
@@ -990,6 +1001,10 @@ class _Importer:
               "text_style": ts, "data": self._data(sheet)}
         self.conn_states[elem.get("ID")] = st
         page["connectors"].append(st)
+
+
+def _same_points(a: list, b: list, tol: float = 1e-3) -> bool:
+    return len(a) == len(b) and all(abs(p[0] - q[0]) < tol and abs(p[1] - q[1]) < tol for p, q in zip(a, b))
 
 
 def import_vsdx(path: str) -> tuple[dict, list[str]]:
@@ -1376,9 +1391,9 @@ def _page_xml(scene, images: list[tuple[str, bytes]], fonts: dict) -> tuple[byte
                 _cell(el, "ImgWidth", W)
                 _cell(el, "ImgHeight", H)
             _text_cells(el, st["text_style"], fonts)
-            if sdef.ports:
+            if it.ports:
                 sec = _el(el, "Section", N="Connection")
-                for i, (nx, ny) in enumerate(sdef.ports):
+                for i, (nx, ny) in enumerate(it.ports):
                     row = _el(sec, "Row", IX=str(i))
                     _cell(row, "X", nx * W, None, f"Width*{_f(nx)}")
                     _cell(row, "Y", (1 - ny) * H, None, f"Height*{_f(1 - ny)}")

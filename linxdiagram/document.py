@@ -47,6 +47,8 @@ class Document(QObject):
             if p.editing_item is not None:
                 p.editing_item.finish_edit()
             p.clear_hover()
+            p.selected_port = None
+            p.update()
         self.toolChanged.emit(tool)
 
     def show_page(self, scene: DiagramScene) -> None:

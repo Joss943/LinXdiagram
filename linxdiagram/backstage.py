@@ -167,6 +167,7 @@ class Backstage(QWidget):
                 self.stack.insertWidget(self.stack.indexOf(old), self.pages["print"])
                 self.stack.removeWidget(old)
                 old.deleteLater()
+            self.sync_print_options()
             self._refresh_preview()
         if key == "info":
             self.set_info()
@@ -490,7 +491,19 @@ class Backstage(QWidget):
         self.which.addItems(["Imprimer toutes les pages", "Imprimer la page active"])
         self.which.currentIndexChanged.connect(lambda _i: self._refresh_preview())
         left.addWidget(self.which)
-        hint = QLabel("Chaque page est ajustée à la feuille ; l'orientation suit celle de la page.")
+        # Comme Visio : ajuster à la feuille, ou imprimer à 100 % sur plusieurs feuilles.
+        self.scale_mode = QComboBox()
+        self.scale_mode.addItems(["Ajuster à la feuille", "Taille réelle (mosaïque de feuilles)"])
+        self.scale_mode.currentIndexChanged.connect(self._print_options_changed)
+        left.addWidget(self.scale_mode)
+        from .units import PAGE_SIZES
+        self.paper = QComboBox()
+        for name, (pw, ph) in PAGE_SIZES.items():
+            self.paper.addItem(f"Papier {name} ({pw:g} × {ph:g} mm)", name)
+        self.paper.currentIndexChanged.connect(self._print_options_changed)
+        left.addWidget(self.paper)
+        hint = QLabel("L'orientation suit celle de la page. En taille réelle, les sauts de page "
+                      "(Affichage > Sauts de page) montrent le découpage des feuilles.")
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
         left.addWidget(hint)
@@ -506,6 +519,26 @@ class Backstage(QWidget):
         outer.addWidget(self.preview, 1)
         return w
 
+    def sync_print_options(self) -> None:
+        """Reprend les options d'impression enregistrées dans le document."""
+        if not hasattr(self, "scale_mode"):  # page Imprimer pas encore construite
+            return
+        s = self.win.doc.settings
+        for box, value in ((self.scale_mode, 1 if s.get("print_tile") else 0),
+                           (self.paper, max(0, self.paper.findData(s.get("paper", "A4"))))):
+            box.blockSignals(True)
+            box.setCurrentIndex(value)
+            box.blockSignals(False)
+
+    def _print_options_changed(self, _i=None) -> None:
+        self.win.doc.apply_settings({"print_tile": self.scale_mode.currentIndex() == 1,
+                                     "paper": self.paper.currentData() or "A4"})
+        self._refresh_preview()
+
+    def _print_kw(self) -> dict:
+        s = self.win.doc.settings
+        return {"tile": bool(s.get("print_tile")), "paper": s.get("paper", "A4")}
+
     def _pages_to_print(self):
         if self.which.currentIndex() == 1 and self.win.scene() is not None:
             return [self.win.scene()]
@@ -513,7 +546,7 @@ class Backstage(QWidget):
 
     def _paint_preview(self, printer) -> None:
         from .export import print_pages
-        print_pages(printer, self._pages_to_print())
+        print_pages(printer, self._pages_to_print(), **self._print_kw())
 
     def _refresh_preview(self) -> None:
         self.preview.updatePreview()
@@ -535,7 +568,7 @@ class Backstage(QWidget):
         else:
             printer.setPrinterName(name)
         from .export import print_pages
-        print_pages(printer, self._pages_to_print())
+        print_pages(printer, self._pages_to_print(), **self._print_kw())
         self.back.emit()
 
     # ------------------------------------------------------------------ Exporter
